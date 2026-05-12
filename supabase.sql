@@ -2,22 +2,24 @@
 -- shares 테이블 (신규 설치)
 -- ============================================================
 create table if not exists shares (
-  id         uuid        primary key default gen_random_uuid(),
-  type       text        not null check (type in ('file', 'text')),  -- D2: 타입 제약
-  title      text,
-  content    text,
-  file_path  text,
-  file_url   text,
-  file_size  bigint,
-  mime_type  text,
-  expires_at timestamptz,                                            -- D3: 만료 시각
-  created_at timestamptz default now()
+  id          uuid        primary key default gen_random_uuid(),
+  type        text        not null check (type in ('file', 'text')),
+  title       text,
+  content     text,
+  file_path   text,
+  file_url    text,
+  file_size   bigint,
+  mime_type   text,
+  owner_token text,                                                   -- 소유권 토큰 (기기별 삭제/수정 권한)
+  expires_at  timestamptz,                                            -- 만료 시각
+  created_at  timestamptz default now()
 );
 
 -- ============================================================
 -- 기존 테이블 마이그레이션 (이미 테이블이 있는 경우 아래 실행)
 -- ============================================================
-alter table shares add column if not exists expires_at timestamptz;
+alter table shares add column if not exists owner_token text;
+alter table shares add column if not exists expires_at  timestamptz;
 
 -- type CHECK 제약 추가 (중복 오류 무시)
 do $$ begin
