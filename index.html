@@ -5,6 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>자료공유</title>
   <link rel="stylesheet" href="style.css" />
+  <link rel="manifest" href="manifest.json" />
+  <meta name="theme-color" content="#2563eb" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+  <meta name="apple-mobile-web-app-title" content="자료공유" />
+  <link rel="apple-touch-icon" href="icons/icon.svg" />
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
@@ -16,6 +23,20 @@
     <img id="lightboxImg" src="" alt="" />
   </div>
 
+  <!-- 이메일 설정 모달 -->
+  <div class="email-modal" id="emailModal">
+    <div class="email-box">
+      <h3>내 이메일 설정</h3>
+      <p class="email-modal-desc">이메일로 내가 올린 자료를 구분합니다.<br>실제 인증 없이 표시 용도로만 사용됩니다.</p>
+      <input id="emailModalInput" type="email" placeholder="you@example.com" />
+      <div class="email-actions">
+        <button id="emailSaveBtn">저장</button>
+        <button class="secondary" id="emailClearBtn">삭제</button>
+        <button class="secondary" id="emailCancelBtn">취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- QR 모달 -->
   <div class="qr-modal" id="qrModal">
     <div class="qr-box">
@@ -25,13 +46,32 @@
     </div>
   </div>
 
-  <main class="app">
+  <!-- 로그인 화면 -->
+  <div id="loginScreen" class="login-screen" hidden>
+    <div class="login-card">
+      <div class="login-brand">
+        <span class="login-icon">📤</span>
+        <h1>자료공유</h1>
+        <p>파일과 텍스트를 드래그앤드롭으로<br>빠르게 공유합니다</p>
+      </div>
+      <div class="login-form-wrap">
+        <label for="loginEmailInput">이메일로 시작하기</label>
+        <input id="loginEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+        <p class="login-error" id="loginError"></p>
+        <button id="loginBtn">시작하기</button>
+      </div>
+      <p class="login-notice">이메일은 이 기기에만 저장되며 업로드한 자료에 표시됩니다.</p>
+    </div>
+  </div>
+
+  <main class="app" hidden>
     <header>
       <div class="brand">
         <h1>자료공유</h1>
         <p>파일과 텍스트를 드래그앤드롭으로 빠르게 공유합니다.</p>
       </div>
       <div class="header-right">
+        <button class="icon-btn" id="profileBtn" title="이메일 설정">👤</button>
         <button class="icon-btn" id="themeBtn" title="다크모드 전환">🌙</button>
         <div class="badge" id="statusBadge">Supabase 연결 대기</div>
       </div>
@@ -101,7 +141,7 @@
               <option value="oldest">오래된순</option>
               <option value="size">크기순</option>
             </select>
-            <button class="secondary" id="multiToggleBtn">선택</button>
+<button class="secondary" id="multiToggleBtn">선택</button>
             <button class="danger" id="multiDeleteBtn">선택 삭제</button>
           </div>
         </div>
@@ -115,5 +155,10 @@
 
   <script src="config.js"></script>
   <script src="app.js"></script>
+  <script>
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('sw.js');
+    }
+  </script>
 </body>
 </html>

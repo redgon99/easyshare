@@ -19,6 +19,7 @@ create table if not exists shares (
 -- 기존 테이블 마이그레이션 (이미 테이블이 있는 경우 아래 실행)
 -- ============================================================
 alter table shares add column if not exists owner_token text;
+alter table shares add column if not exists owner_email text;
 alter table shares add column if not exists expires_at  timestamptz;
 
 -- type CHECK 제약 추가 (중복 오류 무시)
@@ -59,6 +60,38 @@ end $$;
 do $$ begin
   create policy "public delete shares"
     on shares for delete to anon using (true);
+exception when duplicate_object then null;
+end $$;
+
+-- ============================================================
+-- visits 테이블 (접속 로그)
+-- ============================================================
+create table if not exists visits (
+  id          uuid        primary key default gen_random_uuid(),
+  owner_email text,
+  visited_at  timestamptz default now(),
+  user_agent  text
+);
+
+create index if not exists visits_visited_at_idx on visits (visited_at desc);
+
+alter table visits enable row level security;
+
+do $$ begin
+  create policy "public insert visits"
+    on visits for insert to anon with check (true);
+exception when duplicate_object then null;
+end $$;
+
+do $$ begin
+  create policy "public read visits"
+    on visits for select to anon using (true);
+exception when duplicate_object then null;
+end $$;
+
+do $$ begin
+  create policy "public delete visits"
+    on visits for delete to anon using (true);
 exception when duplicate_object then null;
 end $$;
 

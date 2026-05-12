@@ -353,6 +353,69 @@ body.multiselect #multiDeleteBtn { display: inline-flex; }
 }
 .toast.show { opacity: 1; }
 
+/* ── 로그인 화면 ── */
+.login-screen {
+  position: fixed; inset: 0; z-index: 500;
+  display: grid; place-items: center;
+  background: radial-gradient(circle at top left, #e8f0ff, transparent 32rem), var(--bg);
+  transition: opacity .3s ease;
+}
+.login-screen[hidden] { display: none !important; }
+.login-screen.fade-out { opacity: 0; pointer-events: none; }
+[data-theme="dark"] .login-screen {
+  background: radial-gradient(circle at top left, #1e2a4a, transparent 32rem), var(--bg);
+}
+
+.login-card {
+  width: min(400px, 90vw);
+  background: rgba(255,255,255,.9); backdrop-filter: blur(12px);
+  border: 1px solid rgba(255,255,255,.8);
+  border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 40px 32px; display: flex; flex-direction: column; gap: 26px;
+}
+[data-theme="dark"] .login-card {
+  background: rgba(26,29,39,.9);
+  border-color: rgba(255,255,255,.05);
+}
+.login-icon  { font-size: 40px; line-height: 1; }
+.login-brand { display: flex; flex-direction: column; gap: 4px; }
+.login-brand h1 { margin: 0; font-size: 32px; letter-spacing: -.05em; }
+.login-brand p  { margin: 6px 0 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+
+.login-form-wrap { display: flex; flex-direction: column; gap: 10px; }
+.login-form-wrap label  { font-size: 14px; font-weight: 700; }
+.login-form-wrap input  { font-size: 15px; }
+.login-form-wrap button { font-size: 15px; padding: 14px; }
+.login-error  { margin: 0; min-height: 16px; font-size: 12px; color: var(--danger); }
+.login-notice { margin: 0; font-size: 12px; color: var(--muted); text-align: center; line-height: 1.5; }
+
+/* 아바타 (업로더 이메일 이니셜) */
+.avatar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 16px; height: 16px; border-radius: 50%;
+  font-size: 9px; font-weight: 800; color: #fff;
+  flex-shrink: 0; vertical-align: middle; margin-right: 4px;
+}
+
+/* 이메일 설정 모달 */
+.email-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  display: grid; place-items: center; z-index: 200;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.email-modal.open { opacity: 1; pointer-events: all; }
+.email-box {
+  background: var(--card); border-radius: 20px;
+  padding: 28px; width: min(340px, 90vw);
+  box-shadow: 0 24px 64px rgba(0,0,0,.25);
+}
+.email-box h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -.02em; }
+.email-modal-desc { margin: 0 0 16px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.email-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+/* 내 자료 필터 활성 상태 */
+button.filter-active { background: var(--accent) !important; color: #fff !important; }
+
 @media (max-width: 760px) {
   .app                         { padding: 20px 12px 34px; }
   header                       { align-items: flex-start; flex-direction: column; }

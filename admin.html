@@ -1,0 +1,742 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>관리자 대시보드 · 자료공유</title>
+  <link rel="stylesheet" href="style.css" />
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+</head>
+<body>
+
+<!-- 관리자 로그인 -->
+<div id="adminLogin" class="login-screen" hidden>
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="login-icon">🔒</span>
+      <h1>관리자 로그인</h1>
+      <p>관리자 이메일로 접근합니다</p>
+    </div>
+    <div class="login-form-wrap">
+      <label for="adminEmailInput">관리자 이메일</label>
+      <input id="adminEmailInput" type="email" placeholder="admin@example.com" autocomplete="email" />
+      <p class="login-error" id="adminError"></p>
+      <button id="adminLoginBtn">로그인</button>
+    </div>
+  </div>
+</div>
+
+<!-- 대시보드 -->
+<main id="adminApp" hidden>
+  <header>
+    <div class="brand">
+      <h1>관리자 대시보드</h1>
+      <p>자료공유 서비스 관리</p>
+    </div>
+    <div class="header-right">
+      <span id="adminEmailBadge" class="admin-badge"></span>
+      <button class="icon-btn" id="refreshBtn" title="새로고침">🔄</button>
+      <button class="icon-btn" id="themeBtn" title="다크모드 전환">🌙</button>
+      <button class="secondary" id="adminLogoutBtn">로그아웃</button>
+    </div>
+  </header>
+
+  <!-- 통계 카드 -->
+  <div class="admin-stats">
+    <div class="stat-card">
+      <div class="stat-num" id="statTotal">-</div>
+      <div class="stat-label">총 업로드</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="statSize">-</div>
+      <div class="stat-label">총 용량</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="statUsers">-</div>
+      <div class="stat-label">사용자 수</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="statVisits">-</div>
+      <div class="stat-label">총 접속</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="statToday">-</div>
+      <div class="stat-label">오늘 접속</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-num" id="statExpired">-</div>
+      <div class="stat-label">만료 항목</div>
+    </div>
+  </div>
+
+  <!-- 탭 -->
+  <div class="admin-tabs">
+    <button class="tab-btn active" data-tab="uploads">📁 업로드 관리</button>
+    <button class="tab-btn" data-tab="visits">👥 접속 현황</button>
+    <button class="tab-btn" data-tab="users">📊 사용자 분석</button>
+  </div>
+
+  <!-- 업로드 관리 탭 -->
+  <div id="tabUploads" class="tab-content">
+    <div class="admin-toolbar">
+      <input type="search" id="adminSearch" placeholder="제목, 이메일 검색…" />
+      <select id="typeFilter">
+        <option value="all">전체 종류</option>
+        <option value="file">파일만</option>
+        <option value="text">텍스트만</option>
+        <option value="expired">만료됨</option>
+      </select>
+      <button class="secondary" id="exportCsvBtn">CSV 내보내기</button>
+      <button class="danger" id="deleteExpiredBtn">만료 항목 삭제</button>
+    </div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th style="width:36px"><input type="checkbox" id="checkAll" /></th>
+            <th style="width:32px"></th>
+            <th>제목</th>
+            <th>업로더</th>
+            <th style="width:72px">용량</th>
+            <th style="width:110px">업로드일</th>
+            <th style="width:80px">만료</th>
+            <th style="width:40px"></th>
+          </tr>
+        </thead>
+        <tbody id="uploadsBody"></tbody>
+      </table>
+    </div>
+    <div class="table-actions" id="tableActions" hidden>
+      <span id="selectedCount">0개 선택됨</span>
+      <button class="danger" id="bulkDeleteBtn">선택 삭제</button>
+    </div>
+  </div>
+
+  <!-- 접속 현황 탭 -->
+  <div id="tabVisits" class="tab-content" hidden>
+    <div class="admin-toolbar">
+      <input type="search" id="visitSearch" placeholder="이메일 검색…" />
+      <select id="visitDateFilter">
+        <option value="all">전체 기간</option>
+        <option value="today">오늘</option>
+        <option value="week">이번 주</option>
+        <option value="month">이번 달</option>
+      </select>
+    </div>
+    <div class="visit-summary" id="visitSummary"></div>
+    <div class="admin-table-wrap">
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>이메일</th>
+            <th style="width:120px">접속 시각</th>
+            <th>기기 정보</th>
+          </tr>
+        </thead>
+        <tbody id="visitsBody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- 사용자 분석 탭 -->
+  <div id="tabUsers" class="tab-content" hidden>
+    <div class="user-grid" id="userGrid"></div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<style>
+/* ── 관리자 전용 스타일 ─────────────────────────────────── */
+.admin-badge {
+  font-size: .8rem;
+  color: var(--muted);
+  padding: 4px 12px;
+  background: var(--surface);
+  border-radius: 99px;
+  border: 1px solid var(--border);
+}
+
+.admin-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 14px;
+  padding: 20px 24px 0;
+}
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px 16px;
+  text-align: center;
+}
+.stat-num {
+  font-size: 1.8rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+.stat-label {
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: 5px;
+}
+
+.admin-tabs {
+  display: flex;
+  gap: 2px;
+  padding: 20px 24px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab-btn {
+  background: none;
+  border: none;
+  padding: 10px 18px;
+  border-radius: 8px 8px 0 0;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: .9rem;
+  border-bottom: 2px solid transparent;
+  transition: color .15s;
+}
+.tab-btn.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+  font-weight: 700;
+  background: var(--bg);
+}
+.tab-content { padding: 20px 24px; }
+
+.admin-toolbar {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.admin-toolbar input[type=search] { flex: 1; min-width: 180px; }
+
+.admin-table-wrap {
+  overflow-x: auto;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .875rem;
+}
+.admin-table th {
+  background: var(--surface);
+  padding: 9px 12px;
+  text-align: left;
+  font-weight: 600;
+  font-size: .75rem;
+  color: var(--muted);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.admin-table td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.admin-table tr:last-child td { border-bottom: none; }
+.admin-table tr:hover td { background: var(--surface); }
+.cell-email {
+  font-size: .8rem;
+  color: var(--muted);
+  max-width: 150px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-title {
+  max-width: 240px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.cell-ua {
+  font-size: .78rem;
+  color: var(--muted);
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.row-expired td { opacity: .5; }
+
+.table-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+}
+.table-actions span { flex: 1; font-size: .875rem; font-weight: 600; }
+
+.visit-summary {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.visit-chip {
+  padding: 5px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 99px;
+  font-size: .8rem;
+}
+.visit-chip strong { color: var(--accent); }
+
+.user-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 14px;
+}
+.user-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.user-card-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.user-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: #fff;
+  flex-shrink: 0;
+}
+.user-email {
+  font-size: .875rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.user-stats {
+  display: flex;
+  gap: 14px;
+}
+.user-stat { text-align: center; }
+.user-stat-num { font-size: 1.25rem; font-weight: 700; color: var(--accent); }
+.user-stat-label { font-size: .7rem; color: var(--muted); margin-top: 2px; }
+</style>
+
+<script src="config.js"></script>
+<script>
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let allShares = [], allVisits = [], selectedIds = new Set();
+
+// ── 인증 ─────────────────────────────────────────────────
+function checkAdmin() {
+  const stored = (localStorage.getItem('ownerEmail') || '').trim().toLowerCase();
+  if (stored && stored === ADMIN_EMAIL.toLowerCase()) {
+    showDashboard(stored);
+  } else {
+    document.getElementById('adminLogin').hidden = false;
+    document.getElementById('adminLoginBtn').addEventListener('click', tryLogin);
+    document.getElementById('adminEmailInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') tryLogin();
+    });
+  }
+}
+
+function tryLogin() {
+  const input = document.getElementById('adminEmailInput');
+  const err   = document.getElementById('adminError');
+  const email = input.value.trim().toLowerCase();
+  if (!email || email !== ADMIN_EMAIL.toLowerCase()) {
+    err.textContent = '관리자 이메일이 일치하지 않습니다.';
+    input.focus();
+    return;
+  }
+  err.textContent = '';
+  document.getElementById('adminLogin').hidden = true;
+  showDashboard(email);
+}
+
+function showDashboard(email) {
+  document.getElementById('adminApp').hidden = false;
+  document.getElementById('adminEmailBadge').textContent = email;
+  loadTheme();
+  bindEvents();
+  loadAll();
+}
+
+// ── 테마 ─────────────────────────────────────────────────
+function loadTheme() {
+  const saved = localStorage.getItem('theme') ||
+    (window.matchMedia('(prefers-color-scheme:dark)').matches ? 'dark' : 'light');
+  applyTheme(saved);
+}
+function applyTheme(t) {
+  document.documentElement.dataset.theme = t;
+  document.getElementById('themeBtn').textContent = t === 'dark' ? '☀️' : '🌙';
+}
+
+// ── 데이터 로드 ───────────────────────────────────────────
+async function loadAll() {
+  document.getElementById('statTotal').textContent = '…';
+  const [shares, visits] = await Promise.all([
+    db.from('shares').select('*').order('created_at', { ascending: false }).limit(500),
+    db.from('visits').select('*').order('visited_at', { ascending: false }).limit(1000),
+  ]);
+  allShares = shares.data || [];
+  allVisits = visits.data || [];
+  updateStats();
+  renderUploads();
+  renderVisits();
+  renderUsers();
+  showToast('데이터 로드 완료');
+}
+
+// ── 통계 ─────────────────────────────────────────────────
+function updateStats() {
+  const now        = new Date();
+  const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0);
+  const totalSize  = allShares.reduce((s, x) => s + (x.file_size || 0), 0);
+  const users      = new Set(allShares.map(x => x.owner_email).filter(Boolean)).size;
+  const expired    = allShares.filter(s => s.expires_at && new Date(s.expires_at) <= now).length;
+  const todayV     = allVisits.filter(v => new Date(v.visited_at) >= todayStart).length;
+
+  document.getElementById('statTotal').textContent   = allShares.length;
+  document.getElementById('statSize').textContent    = formatBytes(totalSize);
+  document.getElementById('statUsers').textContent   = users;
+  document.getElementById('statVisits').textContent  = allVisits.length;
+  document.getElementById('statToday').textContent   = todayV;
+  document.getElementById('statExpired').textContent = expired;
+}
+
+// ── 업로드 관리 ───────────────────────────────────────────
+function getFilteredShares() {
+  const kw   = document.getElementById('adminSearch').value.trim().toLowerCase();
+  const type = document.getElementById('typeFilter').value;
+  const now  = Date.now();
+  return allShares.filter(item => {
+    if (type === 'file'    && item.type !== 'file')  return false;
+    if (type === 'text'    && item.type !== 'text')  return false;
+    if (type === 'expired' && (!item.expires_at || new Date(item.expires_at) > now)) return false;
+    if (kw && !`${item.title||''} ${item.owner_email||''}`.toLowerCase().includes(kw)) return false;
+    return true;
+  });
+}
+
+function renderUploads() {
+  const tbody    = document.getElementById('uploadsBody');
+  const filtered = getFilteredShares();
+  tbody.innerHTML = '';
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-cell">항목 없음</td></tr>';
+    return;
+  }
+  const now = Date.now();
+  filtered.forEach(item => {
+    const isExpired = item.expires_at && new Date(item.expires_at).getTime() <= now;
+    const tr = document.createElement('tr');
+    if (isExpired) tr.className = 'row-expired';
+    const date = fmtDate(item.created_at);
+    let expiryText = '없음';
+    if (item.expires_at) {
+      const diff = new Date(item.expires_at) - now;
+      expiryText = isExpired ? '⚠ 만료' : (diff > 3_600_000 ? `${Math.floor(diff/3_600_000)}h` : `${Math.floor(diff/60_000)}m`);
+    }
+    tr.innerHTML = `
+      <td><input type="checkbox" class="row-check" data-id="${item.id}" ${selectedIds.has(item.id) ? 'checked' : ''}></td>
+      <td style="font-size:1rem">${item.type === 'file' ? '📁' : '📝'}</td>
+      <td class="cell-title" title="${esc(item.title||'')}">${esc(item.title||'제목 없음')}</td>
+      <td class="cell-email" title="${esc(item.owner_email||'')}">${esc(item.owner_email||'-')}</td>
+      <td style="white-space:nowrap">${item.file_size != null ? formatBytes(item.file_size) : '-'}</td>
+      <td style="white-space:nowrap;font-size:.8rem">${date}</td>
+      <td style="white-space:nowrap;font-size:.8rem">${expiryText}</td>
+      <td><button class="danger del-btn" data-id="${item.id}" style="padding:3px 9px;font-size:.75rem" title="삭제">✕</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+  updateTableActions();
+}
+
+function updateTableActions() {
+  const el = document.getElementById('tableActions');
+  el.hidden = selectedIds.size === 0;
+  document.getElementById('selectedCount').textContent = `${selectedIds.size}개 선택됨`;
+  document.getElementById('bulkDeleteBtn').textContent = `선택 삭제 (${selectedIds.size})`;
+}
+
+// ── 접속 현황 ─────────────────────────────────────────────
+function getFilteredVisits() {
+  const kw    = document.getElementById('visitSearch').value.trim().toLowerCase();
+  const range = document.getElementById('visitDateFilter').value;
+  const now   = new Date();
+  return allVisits.filter(v => {
+    if (kw && !(v.owner_email||'').toLowerCase().includes(kw)) return false;
+    if (range === 'today') {
+      const d = new Date(now); d.setHours(0, 0, 0, 0);
+      if (new Date(v.visited_at) < d) return false;
+    } else if (range === 'week') {
+      const d = new Date(now); d.setDate(d.getDate() - 7);
+      if (new Date(v.visited_at) < d) return false;
+    } else if (range === 'month') {
+      const d = new Date(now); d.setMonth(d.getMonth() - 1);
+      if (new Date(v.visited_at) < d) return false;
+    }
+    return true;
+  });
+}
+
+function renderVisits() {
+  const filtered = getFilteredVisits();
+
+  // 요약 칩
+  const emailSet = new Set(filtered.map(v => v.owner_email).filter(Boolean));
+  const summary  = document.getElementById('visitSummary');
+  summary.innerHTML = `
+    <span class="visit-chip">접속 <strong>${filtered.length}</strong>회</span>
+    <span class="visit-chip">유니크 사용자 <strong>${emailSet.size}</strong>명</span>
+  `;
+
+  const tbody = document.getElementById('visitsBody');
+  tbody.innerHTML = '';
+  if (!filtered.length) {
+    tbody.innerHTML = '<tr><td colspan="3" class="empty-cell">접속 기록 없음</td></tr>';
+    return;
+  }
+  filtered.forEach(v => {
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="cell-email">${esc(v.owner_email || '-')}</td>
+      <td style="font-size:.8rem;white-space:nowrap">${fmtDate(v.visited_at)}</td>
+      <td class="cell-ua" title="${esc(v.user_agent||'')}">${esc(parseUA(v.user_agent||''))}</td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+function parseUA(ua) {
+  if (/iPhone/.test(ua)) return '📱 iPhone';
+  if (/iPad/.test(ua))   return '📱 iPad';
+  if (/Android/.test(ua)) return '📱 Android';
+  if (/Windows/.test(ua)) return '💻 Windows';
+  if (/Macintosh/.test(ua)) return '💻 macOS';
+  if (/Linux/.test(ua)) return '🐧 Linux';
+  return ua.slice(0, 50) || '-';
+}
+
+// ── 사용자 분석 ───────────────────────────────────────────
+function renderUsers() {
+  const grid = document.getElementById('userGrid');
+  const map  = {};
+  allShares.forEach(item => {
+    const email = item.owner_email || '(이메일 없음)';
+    if (!map[email]) map[email] = { files: 0, texts: 0, size: 0, last: null };
+    const u = map[email];
+    item.type === 'file' ? (u.files++, u.size += item.file_size || 0) : u.texts++;
+    const d = new Date(item.created_at);
+    if (!u.last || d > u.last) u.last = d;
+  });
+
+  // 방문 횟수 합산
+  const visitCount = {};
+  allVisits.forEach(v => {
+    const e = v.owner_email || '(이메일 없음)';
+    visitCount[e] = (visitCount[e] || 0) + 1;
+  });
+
+  grid.innerHTML = '';
+  const entries = Object.entries(map).sort((a, b) => (b[1].files + b[1].texts) - (a[1].files + a[1].texts));
+  if (!entries.length) {
+    grid.innerHTML = '<p style="color:var(--muted)">사용자 없음</p>';
+    return;
+  }
+  entries.forEach(([email, s]) => {
+    const card   = document.createElement('div');
+    card.className = 'user-card';
+    const color  = email.includes('@') ? avatarColor(email) : '#888';
+    const last   = s.last ? s.last.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }) : '-';
+    const visits = visitCount[email] || 0;
+    card.innerHTML = `
+      <div class="user-card-header">
+        <div class="user-avatar" style="background:${color}">${email[0].toUpperCase()}</div>
+        <div class="user-email" title="${esc(email)}">${esc(email)}</div>
+      </div>
+      <div class="user-stats">
+        <div class="user-stat"><div class="user-stat-num">${s.files}</div><div class="user-stat-label">파일</div></div>
+        <div class="user-stat"><div class="user-stat-num">${s.texts}</div><div class="user-stat-label">텍스트</div></div>
+        <div class="user-stat"><div class="user-stat-num">${formatBytes(s.size)}</div><div class="user-stat-label">용량</div></div>
+        <div class="user-stat"><div class="user-stat-num">${visits}</div><div class="user-stat-label">접속</div></div>
+        <div class="user-stat"><div class="user-stat-num">${last}</div><div class="user-stat-label">최근 활동</div></div>
+      </div>
+    `;
+    grid.appendChild(card);
+  });
+}
+
+// ── 이벤트 바인딩 ─────────────────────────────────────────
+function bindEvents() {
+  document.getElementById('themeBtn').addEventListener('click', () => {
+    const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+    applyTheme(next); localStorage.setItem('theme', next);
+  });
+  document.getElementById('refreshBtn').addEventListener('click', loadAll);
+  document.getElementById('adminLogoutBtn').addEventListener('click', () => {
+    document.getElementById('adminApp').hidden = true;
+    document.getElementById('adminEmailInput').value = '';
+    document.getElementById('adminLogin').hidden = false;
+  });
+
+  // 탭 전환
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(t => t.hidden = true);
+      btn.classList.add('active');
+      document.getElementById('tab' + btn.dataset.tab[0].toUpperCase() + btn.dataset.tab.slice(1)).hidden = false;
+    });
+  });
+
+  // 검색 / 필터
+  document.getElementById('adminSearch').addEventListener('input', renderUploads);
+  document.getElementById('typeFilter').addEventListener('change', renderUploads);
+  document.getElementById('visitSearch').addEventListener('input', renderVisits);
+  document.getElementById('visitDateFilter').addEventListener('change', renderVisits);
+
+  // 전체 선택
+  document.getElementById('checkAll').addEventListener('change', e => {
+    document.querySelectorAll('.row-check').forEach(cb => {
+      cb.checked = e.target.checked;
+      e.target.checked ? selectedIds.add(cb.dataset.id) : selectedIds.delete(cb.dataset.id);
+    });
+    updateTableActions();
+  });
+
+  // 개별 체크
+  document.getElementById('uploadsBody').addEventListener('change', e => {
+    const cb = e.target.closest('.row-check');
+    if (!cb) return;
+    cb.checked ? selectedIds.add(cb.dataset.id) : selectedIds.delete(cb.dataset.id);
+    updateTableActions();
+  });
+
+  // 개별 삭제
+  document.getElementById('uploadsBody').addEventListener('click', async e => {
+    const btn = e.target.closest('.del-btn');
+    if (!btn) return;
+    const item = allShares.find(s => s.id === btn.dataset.id);
+    if (!item || !confirm(`"${item.title || '제목 없음'}"을 삭제할까요?`)) return;
+    await deleteItem(item);
+    allShares = allShares.filter(s => s.id !== item.id);
+    updateStats(); renderUploads(); renderUsers();
+  });
+
+  // 선택 삭제
+  document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
+    if (!selectedIds.size || !confirm(`${selectedIds.size}개를 삭제할까요?`)) return;
+    const targets = allShares.filter(s => selectedIds.has(s.id));
+    for (const item of targets) await deleteItem(item);
+    allShares = allShares.filter(s => !selectedIds.has(s.id));
+    selectedIds.clear();
+    updateStats(); renderUploads(); renderUsers();
+    showToast(`${targets.length}개 삭제 완료`);
+  });
+
+  // 만료 항목 삭제
+  document.getElementById('deleteExpiredBtn').addEventListener('click', async () => {
+    const expired = allShares.filter(s => s.expires_at && new Date(s.expires_at) <= new Date());
+    if (!expired.length) { showToast('만료된 항목이 없습니다'); return; }
+    if (!confirm(`만료된 항목 ${expired.length}개를 삭제할까요?`)) return;
+    for (const item of expired) await deleteItem(item);
+    const ids = new Set(expired.map(s => s.id));
+    allShares = allShares.filter(s => !ids.has(s.id));
+    updateStats(); renderUploads(); renderUsers();
+    showToast(`${expired.length}개 삭제 완료`);
+  });
+
+  // CSV 내보내기
+  document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
+}
+
+async function deleteItem(item) {
+  if (item.type === 'file' && item.file_path)
+    await db.storage.from(BUCKET_NAME).remove([item.file_path]);
+  await db.from('shares').delete().eq('id', item.id);
+}
+
+function exportCsv() {
+  const rows = [['ID', '종류', '제목', '이메일', '용량(bytes)', '업로드일', '만료일']];
+  getFilteredShares().forEach(item => {
+    rows.push([
+      item.id, item.type,
+      `"${(item.title||'').replace(/"/g,'""')}"`,
+      item.owner_email || '',
+      item.file_size || '',
+      item.created_at,
+      item.expires_at || '',
+    ]);
+  });
+  const csv  = rows.map(r => r.join(',')).join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = `shares_${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+}
+
+// ── 유틸 ─────────────────────────────────────────────────
+function avatarColor(email) {
+  const colors = ['#2563eb','#7c3aed','#db2777','#059669','#d97706','#dc2626','#0891b2'];
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = email.charCodeAt(i) + ((h << 5) - h);
+  return colors[Math.abs(h) % colors.length];
+}
+
+function fmtDate(iso) {
+  return new Date(iso).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+
+function formatBytes(bytes) {
+  if (!bytes) return '0 B';
+  const u = ['B','KB','MB','GB'], i = Math.floor(Math.log(bytes) / Math.log(1024));
+  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
+}
+
+function esc(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  clearTimeout(showToast._t);
+  showToast._t = setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+// ── 시작 ─────────────────────────────────────────────────
+checkAdmin();
+</script>
+
+<style>
+.empty-cell {
+  text-align: center;
+  color: var(--muted);
+  padding: 40px;
+  font-size: .875rem;
+}
+</style>
+</body>
+</html>

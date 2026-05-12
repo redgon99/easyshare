@@ -34,6 +34,17 @@ const qrModal        = document.querySelector("#qrModal");
 const qrCanvas       = document.querySelector("#qrCanvas");
 const qrLabel        = document.querySelector("#qrLabel");
 const qrClose        = document.querySelector("#qrClose");
+const profileBtn     = document.querySelector("#profileBtn");
+const emailModal     = document.querySelector("#emailModal");
+const emailModalInput = document.querySelector("#emailModalInput");
+const emailSaveBtn   = document.querySelector("#emailSaveBtn");
+const emailClearBtn  = document.querySelector("#emailClearBtn");
+const emailCancelBtn = document.querySelector("#emailCancelBtn");
+let OWNER_EMAIL = localStorage.getItem('ownerEmail') || '';
+
+// 이메일 유무에 따라 로그인 화면 또는 앱을 즉시 표시
+document.getElementById('loginScreen').hidden = !!OWNER_EMAIL;
+document.querySelector('.app').hidden = !OWNER_EMAIL;
 
 let shares       = [];
 let displayCount = PAGE_SIZE;
@@ -44,11 +55,52 @@ let selectedIds  = new Set();
 init();
 
 async function init() {
-  bindEvents();
   loadTheme();
+  if (!OWNER_EMAIL) {
+    document.getElementById('loginBtn').addEventListener('click', enterApp);
+    document.getElementById('loginEmailInput').addEventListener('keydown', e => {
+      if (e.key === 'Enter') enterApp();
+    });
+    return;
+  }
+  await startApp();
+}
+
+async function startApp() {
+  bindEvents();
+  updateProfileBtn();
+  logVisit();
   renderSkeleton();
   await loadShares();
   subscribeRealtime();
+}
+
+function logVisit() {
+  supabaseClient.from('visits').insert({
+    owner_email: OWNER_EMAIL,
+    user_agent: navigator.userAgent.slice(0, 250),
+  }).then(() => {});
+}
+
+async function enterApp() {
+  const input = document.getElementById('loginEmailInput');
+  const errEl = document.getElementById('loginError');
+  const email = input.value.trim();
+  if (!email || !email.includes('@')) {
+    errEl.textContent = '올바른 이메일 주소를 입력하세요.';
+    input.focus();
+    return;
+  }
+  errEl.textContent = '';
+  OWNER_EMAIL = email;
+  localStorage.setItem('ownerEmail', email);
+  const ls = document.getElementById('loginScreen');
+  ls.classList.add('fade-out');
+  setTimeout(async () => {
+    ls.hidden = true;
+    document.querySelector('.app').hidden = false;
+    await startApp();
+  }, 300);
 }
 
 // ── 이벤트 바인딩 ────────────────────────────────────────
@@ -114,6 +166,7 @@ function bindEvents() {
     if (e.key === "Escape") {
       lightbox.classList.remove("open");
       qrModal.classList.remove("open");
+      closeEmailModal();
     }
   });
 
@@ -123,6 +176,15 @@ function bindEvents() {
 
   // 다크모드
   themeBtn.addEventListener("click", toggleTheme);
+
+  // 프로필 / 이메일
+  profileBtn.addEventListener("click", openEmailModal);
+  emailSaveBtn.addEventListener("click", saveEmail);
+  emailClearBtn.addEventListener("click", clearEmail);
+  emailCancelBtn.addEventListener("click", closeEmailModal);
+  emailModalInput.addEventListener("keydown", e => { if (e.key === "Enter") saveEmail(); });
+  emailModal.addEventListener("click", e => { if (e.target === emailModal) closeEmailModal(); });
+
 }
 
 // ── 다크모드 ─────────────────────────────────────────────
@@ -139,6 +201,50 @@ function toggleTheme() {
 function applyTheme(t) {
   document.documentElement.dataset.theme = t;
   themeBtn.textContent = t === "dark" ? "☀️" : "🌙";
+}
+
+// ── 이메일 / 프로필 ──────────────────────────────────────
+function openEmailModal() {
+  emailModalInput.value = OWNER_EMAIL;
+  emailModal.classList.add("open");
+  setTimeout(() => emailModalInput.focus(), 50);
+}
+function closeEmailModal() {
+  emailModal.classList.remove("open");
+}
+function saveEmail() {
+  const val = emailModalInput.value.trim();
+  OWNER_EMAIL = val;
+  if (val) localStorage.setItem('ownerEmail', val);
+  else localStorage.removeItem('ownerEmail');
+  updateProfileBtn();
+  closeEmailModal();
+  showToast(val ? `이메일 설정: ${val}` : '이메일이 삭제되었습니다');
+}
+function clearEmail() {
+  OWNER_EMAIL = '';
+  localStorage.removeItem('ownerEmail');
+  closeEmailModal();
+  showToast('이메일이 삭제되었습니다');
+  setTimeout(() => location.reload(), 900);
+}
+function updateProfileBtn() {
+  if (OWNER_EMAIL) {
+    profileBtn.textContent = getInitial(OWNER_EMAIL);
+    profileBtn.style.cssText = `background:${getAvatarColor(OWNER_EMAIL)};color:#fff;font-size:15px;font-weight:800`;
+  } else {
+    profileBtn.textContent = '👤';
+    profileBtn.style.cssText = '';
+  }
+}
+function getInitial(email) {
+  return email ? email[0].toUpperCase() : '';
+}
+function getAvatarColor(email) {
+  const colors = ['#2563eb','#7c3aed','#db2777','#059669','#d97706','#dc2626','#0891b2'];
+  let h = 0;
+  for (let i = 0; i < email.length; i++) h = email.charCodeAt(i) + ((h << 5) - h);
+  return colors[Math.abs(h) % colors.length];
 }
 
 // ── 멀티셀렉트 ───────────────────────────────────────────
@@ -288,6 +394,7 @@ async function uploadFiles(files) {
       file_path: path, file_url: urlData.publicUrl,
       file_size: file.size, mime_type: file.type || "application/octet-stream",
       owner_token: OWNER_TOKEN,
+      owner_email: OWNER_EMAIL || null,
       ...(fileExpiresAt && { expires_at: fileExpiresAt }),
     });
 
@@ -315,6 +422,7 @@ async function shareText() {
     type: "text", title, content,
     file_path: null, file_url: null, file_size: null, mime_type: null,
     owner_token: OWNER_TOKEN,
+    owner_email: OWNER_EMAIL || null,
     ...(textExpiresAt && { expires_at: textExpiresAt }),
   });
 
@@ -347,6 +455,7 @@ async function copyToClipboard(text) {
 async function loadShares() {
   const { data, error } = await supabaseClient
     .from("shares").select("*")
+    .eq("owner_email", OWNER_EMAIL)
     .order("created_at", { ascending: false }).limit(200);
 
   if (error) {
@@ -443,13 +552,21 @@ function createItemEl(item) {
   if (isOwner) titleEl.dataset.action = "rename";
 
   const meta = document.createElement("div"); meta.className = "item-meta";
+  if (item.owner_email) {
+    const av = document.createElement("span");
+    av.className = "avatar";
+    av.style.background = getAvatarColor(item.owner_email);
+    av.textContent = getInitial(item.owner_email);
+    av.title = item.owner_email;
+    meta.appendChild(av);
+  }
   let metaText = `${date} · ${size}`;
   if (item.expires_at) {
     const diffMs = new Date(item.expires_at) - Date.now();
     const h = Math.floor(diffMs / 3_600_000), m = Math.floor((diffMs % 3_600_000) / 60_000);
     metaText += ` · ⏱ ${h > 0 ? `${h}시간` : `${m}분`} 후 만료`;
   }
-  meta.textContent = metaText;
+  meta.appendChild(document.createTextNode(metaText));
   body.appendChild(titleEl); body.appendChild(meta);
 
   // 텍스트: 한줄 스니펫 + 펼치기
