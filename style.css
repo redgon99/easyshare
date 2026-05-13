@@ -260,12 +260,22 @@ body.multiselect .icon       { display: none; }
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 
-/* 텍스트 한줄 스니펫 */
+/* 텍스트 미리보기 (기본 3줄 클램프) */
 .item-snippet {
   margin-top: 2px; font-size: 12px; color: var(--muted);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
   font-style: italic;
+  line-height: 1.5;
+  word-break: break-word;
 }
+/* 펼쳤을 때 미리보기 숨김 */
+.item.text-open .item-snippet { display: none; }
+
+/* 텍스트 아이템 상단 정렬 */
+.item:has(.item-snippet) { align-items: flex-start; }
 
 /* 텍스트 전체 보기 (펼치기) */
 .text-full {
