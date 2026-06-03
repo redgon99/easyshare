@@ -1,4 +1,4 @@
-const CACHE = 'easyshare-v1';
+const CACHE = 'easyshare-v2';
 const STATIC_ASSETS = [
   './',
   './index.html',
@@ -26,9 +26,11 @@ self.addEventListener('activate', e => {
 });
 
 self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+
   const url = new URL(e.request.url);
 
-  // Supabase API / 리얼타임 / CDN — 항상 네트워크 우선
+  // Supabase API / 리얼타임 / CDN — 네트워크 우선
   if (
     url.hostname.includes('supabase.co') ||
     url.hostname.includes('jsdelivr.net')
@@ -39,8 +41,18 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // 앱 셸 — 캐시 우선, 없으면 네트워크
-  e.respondWith(
-    caches.match(e.request).then(cached => cached || fetch(e.request))
-  );
+  // 같은 출처 앱 셸 — 네트워크 우선(캐시는 백업). 구 CSS+신 HTML 불일치로 레이아웃 깨짐 방지
+  if (url.origin === self.location.origin) {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          if (res.ok) {
+            const copy = res.clone();
+            caches.open(CACHE).then(c => c.put(e.request, copy));
+          }
+          return res;
+        })
+        .catch(() => caches.match(e.request))
+    );
+  }
 });

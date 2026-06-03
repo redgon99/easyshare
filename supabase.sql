@@ -63,6 +63,12 @@ do $$ begin
 exception when duplicate_object then null;
 end $$;
 
+do $$ begin
+  create policy "public update shares"
+    on shares for update to anon using (true) with check (true);
+exception when duplicate_object then null;
+end $$;
+
 -- ============================================================
 -- visits 테이블 (접속 로그)
 -- ============================================================

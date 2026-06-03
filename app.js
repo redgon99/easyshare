@@ -40,7 +40,19 @@ const emailModalInput = document.querySelector("#emailModalInput");
 const emailSaveBtn   = document.querySelector("#emailSaveBtn");
 const emailClearBtn  = document.querySelector("#emailClearBtn");
 const emailCancelBtn = document.querySelector("#emailCancelBtn");
-let OWNER_EMAIL = localStorage.getItem('ownerEmail') || '';
+const editModal        = document.querySelector("#editModal");
+const editModalHeading = document.querySelector("#editModalHeading");
+const editTextFields   = document.querySelector("#editTextFields");
+const editFileFields   = document.querySelector("#editFileFields");
+const editTitleInput   = document.querySelector("#editTitleInput");
+const editContentInput = document.querySelector("#editContentInput");
+const editFileCurrent  = document.querySelector("#editFileCurrent");
+const editFileInput    = document.querySelector("#editFileInput");
+const editFilePickLabel = document.querySelector("#editFilePickLabel");
+const editSaveBtn      = document.querySelector("#editSaveBtn");
+const editCancelBtn    = document.querySelector("#editCancelBtn");
+let OWNER_EMAIL = normalizeEmail(localStorage.getItem('ownerEmail') || '');
+let editingItem = null;
 
 // 이메일 유무에 따라 로그인 화면 또는 앱을 즉시 표시
 document.getElementById('loginScreen').hidden = !!OWNER_EMAIL;
@@ -92,8 +104,8 @@ async function enterApp() {
     return;
   }
   errEl.textContent = '';
-  OWNER_EMAIL = email;
-  localStorage.setItem('ownerEmail', email);
+  OWNER_EMAIL = normalizeEmail(email);
+  localStorage.setItem('ownerEmail', OWNER_EMAIL);
   const ls = document.getElementById('loginScreen');
   ls.classList.add('fade-out');
   setTimeout(async () => {
@@ -167,6 +179,7 @@ function bindEvents() {
       lightbox.classList.remove("open");
       qrModal.classList.remove("open");
       closeEmailModal();
+      closeEditModal();
     }
   });
 
@@ -185,6 +198,36 @@ function bindEvents() {
   emailModalInput.addEventListener("keydown", e => { if (e.key === "Enter") saveEmail(); });
   emailModal.addEventListener("click", e => { if (e.target === emailModal) closeEmailModal(); });
 
+  editSaveBtn.addEventListener("click", saveEdit);
+  editCancelBtn.addEventListener("click", closeEditModal);
+  editModal.addEventListener("click", e => { if (e.target === editModal) closeEditModal(); });
+  editFileInput.addEventListener("change", () => {
+    const file = editFileInput.files?.[0];
+    const pick = editFileInput.closest(".edit-file-pick");
+    if (file) {
+      pick?.classList.add("has-file");
+      editFilePickLabel.textContent = file.name;
+    } else {
+      pick?.classList.remove("has-file");
+      editFilePickLabel.textContent = "새 파일 선택";
+    }
+  });
+
+}
+
+function normalizeEmail(email) {
+  return (email || "").trim().toLowerCase();
+}
+
+function isSameAccount(item) {
+  if (!OWNER_EMAIL || !item.owner_email) return false;
+  return normalizeEmail(item.owner_email) === OWNER_EMAIL;
+}
+
+/** 같은 이메일 계정이거나, 이 기기 토큰으로 올린 항목(이메일 없는 구 데이터) */
+function isItemOwner(item) {
+  if (isSameAccount(item)) return true;
+  return item.owner_token === OWNER_TOKEN || !item.owner_token;
 }
 
 // ── 다크모드 ─────────────────────────────────────────────
@@ -213,7 +256,7 @@ function closeEmailModal() {
   emailModal.classList.remove("open");
 }
 function saveEmail() {
-  const val = emailModalInput.value.trim();
+  const val = normalizeEmail(emailModalInput.value);
   OWNER_EMAIL = val;
   if (val) localStorage.setItem('ownerEmail', val);
   else localStorage.removeItem('ownerEmail');
@@ -294,7 +337,7 @@ async function handleItemAction(e) {
   if (action === "delete-cancel"           ) { resetDeleteBtn(itemEl); }
   if (action === "expand"                  ) { toggleExpand(btn); }
   if (action === "show-qr"         && item) { openQr(item.file_url || item.content); }
-  if (action === "rename"          && item) { startRename(btn, item, itemEl); }
+  if (action === "edit"            && item) { openEditModal(item); }
 }
 
 function showDeleteConfirm(deleteBtn) {
@@ -326,28 +369,113 @@ function openQr(text) {
   qrModal.classList.add("open");
 }
 
-function startRename(btn, item, itemEl) {
-  const titleEl = itemEl.querySelector(".item-title");
-  const input   = document.createElement("input");
-  input.type      = "text";
-  input.className = "title-edit-input";
-  input.value     = item.title || "";
-  titleEl.replaceWith(input);
-  input.focus(); input.select();
+function openEditModal(item) {
+  if (!isItemOwner(item)) { showToast("이 계정으로 올린 자료만 수정할 수 있습니다."); return; }
+  editingItem = item;
+  editFileInput.value = "";
+  editFileInput.closest(".edit-file-pick")?.classList.remove("has-file");
+  editFilePickLabel.textContent = "새 파일 선택";
 
-  const save = async () => {
-    const newTitle = input.value.trim() || item.title;
-    if (newTitle !== item.title) {
-      await supabaseClient.from("shares").update({ title: newTitle }).eq("id", item.id);
-      item.title = newTitle;
+  if (item.type === "text") {
+    editModalHeading.textContent = "텍스트 수정";
+    editTextFields.hidden = false;
+    editFileFields.hidden = true;
+    editTitleInput.value = item.title || "";
+    editContentInput.value = item.content || "";
+    setTimeout(() => editTitleInput.focus(), 50);
+  } else {
+    editModalHeading.textContent = "파일 교체";
+    editTextFields.hidden = true;
+    editFileFields.hidden = false;
+    editFileCurrent.textContent = `현재 파일: ${item.title || "제목 없음"}${item.file_size != null ? ` (${formatBytes(item.file_size)})` : ""}`;
+  }
+  editModal.classList.add("open");
+}
+
+function closeEditModal() {
+  editModal.classList.remove("open");
+  editingItem = null;
+  editSaveBtn.disabled = false;
+}
+
+async function saveEdit() {
+  if (!editingItem) return;
+  if (!isItemOwner(editingItem)) { showToast("수정 권한이 없습니다."); closeEditModal(); return; }
+
+  editSaveBtn.disabled = true;
+  try {
+    if (editingItem.type === "text") {
+      const content = editContentInput.value.trim();
+      if (!content) { showToast("내용을 입력하세요."); return; }
+      const rawTitle = editTitleInput.value.trim();
+      const title = rawTitle || (content.length > TITLE_MAX_LEN ? content.slice(0, TITLE_MAX_LEN) + "…" : content);
+      const { error } = await supabaseClient.from("shares").update({ title, content }).eq("id", editingItem.id);
+      if (error) { showToast("수정 실패"); return; }
+      editingItem.title = title;
+      editingItem.content = content;
+      showToast("수정 완료");
+      closeEditModal();
+      renderShares();
+    } else {
+      const file = editFileInput.files?.[0];
+      if (!file) { showToast("교체할 파일을 선택하세요."); return; }
+      const ok = await replaceFileItem(editingItem, file);
+      if (ok) {
+        showToast("파일 교체 완료");
+        closeEditModal();
+        await loadShares();
+      }
     }
-    const p = document.createElement("p");
-    p.className = "item-title"; p.textContent = newTitle;
-    p.dataset.action = "rename";
-    input.replaceWith(p);
-  };
-  input.addEventListener("blur",    save);
-  input.addEventListener("keydown", e => { if (e.key === "Enter") input.blur(); if (e.key === "Escape") { input.value = item.title; input.blur(); } });
+  } finally {
+    editSaveBtn.disabled = false;
+  }
+}
+
+async function replaceFileItem(item, file) {
+  if (file.size > FILE_SIZE_MAX) {
+    showToast(`파일 크기 초과 (최대 50 MB)`);
+    return false;
+  }
+
+  const oldPath = item.file_path;
+  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+  const path = `${Date.now()}-${generateId()}-${safeName}`;
+
+  setProgress(0);
+  showToast(`${file.name} 업로드 중…`);
+
+  const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, {
+    upsert: false,
+    onUploadProgress: p => setProgress(Math.round((p.loaded / p.total) * 100)),
+  });
+
+  if (uploadError) {
+    setProgress(null);
+    showToast(`업로드 실패: ${file.name}`);
+    return false;
+  }
+
+  const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(path);
+  const { error: updateError } = await supabaseClient.from("shares").update({
+    title: file.name,
+    file_path: path,
+    file_url: urlData.publicUrl,
+    file_size: file.size,
+    mime_type: file.type || "application/octet-stream",
+  }).eq("id", item.id);
+
+  setProgress(null);
+
+  if (updateError) {
+    await supabaseClient.storage.from(BUCKET_NAME).remove([path]);
+    showToast("파일 정보 저장 실패");
+    return false;
+  }
+
+  if (oldPath && oldPath !== path) {
+    await supabaseClient.storage.from(BUCKET_NAME).remove([oldPath]);
+  }
+  return true;
 }
 
 // ── 업로드 ───────────────────────────────────────────────
@@ -505,12 +633,22 @@ function renderShares() {
   }
   visible.forEach(item => shareList.appendChild(createItemEl(item)));
   loadMoreBtn.hidden = filtered.length <= displayCount;
+  resetListScroll();
+}
+
+/** 스켈레톤 shimmer 등으로 생긴 가로 스크롤 잔여 위치 초기화 */
+function resetListScroll() {
+  requestAnimationFrame(() => {
+    document.documentElement.scrollLeft = 0;
+    document.body.scrollLeft = 0;
+    shareList.scrollLeft = 0;
+  });
 }
 
 function createItemEl(item) {
   const isFile  = item.type === "file";
   const isImage = isFile && item.mime_type?.startsWith("image/");
-  const isOwner = item.owner_token === OWNER_TOKEN || !item.owner_token;
+  const isOwner = isItemOwner(item);
   const date    = new Date(item.created_at).toLocaleString("ko-KR", {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
@@ -549,7 +687,6 @@ function createItemEl(item) {
   titleEl.className   = "item-title";
   titleEl.textContent = item.title || "제목 없음";
   titleEl.title       = item.title || "";
-  if (isOwner) titleEl.dataset.action = "rename";
 
   const meta = document.createElement("div"); meta.className = "item-meta";
   if (item.owner_email) {
@@ -621,6 +758,11 @@ function createItemEl(item) {
   }
 
   if (isOwner) {
+    const editBtn = document.createElement("button");
+    editBtn.className = "secondary"; editBtn.dataset.action = "edit";
+    editBtn.textContent = "수정"; editBtn.title = isFile ? "파일 교체" : "제목·내용 수정";
+    actions.insertBefore(editBtn, actions.firstChild);
+
     const delBtn = document.createElement("button");
     delBtn.className = "danger"; delBtn.dataset.action = "delete-request"; delBtn.textContent = "✕";
     delBtn.title = "삭제";
@@ -661,6 +803,7 @@ function renderSkeleton() {
   for (let i = 0; i < 3; i++) {
     const sk = document.createElement("div"); sk.className = "skeleton"; shareList.appendChild(sk);
   }
+  resetListScroll();
 }
 
 function generateId() {

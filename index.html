@@ -38,6 +38,30 @@
     </div>
   </div>
 
+  <!-- 수정 모달 -->
+  <div class="edit-modal" id="editModal">
+    <div class="edit-box">
+      <h3 id="editModalHeading">자료 수정</h3>
+      <div id="editTextFields">
+        <label for="editTitleInput">제목</label>
+        <input id="editTitleInput" type="text" placeholder="제목" />
+        <label for="editContentInput">내용</label>
+        <textarea id="editContentInput" placeholder="공유할 내용"></textarea>
+      </div>
+      <div id="editFileFields" hidden>
+        <p class="edit-file-current" id="editFileCurrent"></p>
+        <label class="edit-file-pick" for="editFileInput">
+          <span id="editFilePickLabel">새 파일 선택</span>
+          <input id="editFileInput" type="file" />
+        </label>
+      </div>
+      <div class="edit-actions">
+        <button type="button" id="editSaveBtn">저장</button>
+        <button type="button" class="secondary" id="editCancelBtn">취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- QR 모달 -->
   <div class="qr-modal" id="qrModal">
     <div class="qr-box">
