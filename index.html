@@ -38,6 +38,20 @@
     </div>
   </div>
 
+  <!-- 합치기 모달 -->
+  <div class="merge-modal" id="mergeModal">
+    <div class="merge-box">
+      <h3>게시물 합치기</h3>
+      <p class="merge-modal-desc" id="mergeModalDesc">선택한 항목을 하나의 게시물로 합칩니다.</p>
+      <label for="mergeTitleInput">새 제목</label>
+      <input id="mergeTitleInput" type="text" placeholder="합친 게시물 제목" />
+      <div class="merge-actions">
+        <button type="button" id="mergeConfirmBtn">합치기</button>
+        <button type="button" class="secondary" id="mergeCancelBtn">취소</button>
+      </div>
+    </div>
+  </div>
+
   <!-- 수정 모달 -->
   <div class="edit-modal" id="editModal">
     <div class="edit-box">
@@ -106,6 +120,7 @@
       <!-- 파일 공유 -->
       <div class="card">
         <h2>파일 공유</h2>
+        <input id="fileTitleInput" class="title-input" type="text" placeholder="제목 (선택 사항)" />
         <label class="dropzone" id="dropzone">
           <input id="fileInput" type="file" multiple />
           <div>
@@ -130,6 +145,11 @@
             <option value="1440">24시간</option>
             <option value="10080">7일</option>
           </select>
+        </div>
+        <ul class="file-queue" id="fileQueue" hidden></ul>
+        <div class="actions">
+          <button id="shareFilesBtn" disabled>파일 공유</button>
+          <button class="secondary" id="clearFilesBtn">비우기</button>
         </div>
       </div>
 
@@ -167,6 +187,7 @@
               <option value="size">크기순</option>
             </select>
 <button class="secondary" id="multiToggleBtn">선택</button>
+            <button class="secondary" id="multiMergeBtn">합치기</button>
             <button class="danger" id="multiDeleteBtn">선택 삭제</button>
           </div>
         </div>

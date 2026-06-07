@@ -149,6 +149,174 @@ textarea            { min-height: 120px; resize: vertical; line-height: 1.55; }
 textarea:focus, input:focus { border-color: var(--accent); }
 .title-input        { margin-bottom: 8px; }
 
+/* 파일 대기 목록 */
+.file-queue {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.file-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fff;
+  font-size: 13px;
+}
+[data-theme="dark"] .file-queue-item { background: #13161f; }
+.file-queue-icon { flex-shrink: 0; font-size: 18px; }
+.file-queue-info { flex: 1; min-width: 0; }
+.file-queue-name {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-queue-size { font-size: 11px; color: var(--muted); margin-top: 2px; }
+.file-queue-remove {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  border-radius: 8px;
+  background: #fee2e2;
+  color: var(--danger);
+}
+.file-queue-remove:hover { transform: none; }
+
+/* 공유 목록 — 파일 묶음 */
+.bundle-wrap { margin-top: 6px; min-width: 0; }
+.bundle-preview {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.item.files-open .bundle-preview { display: none; }
+
+.bundle-toolbar {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+.item.files-open .bundle-toolbar { display: flex; }
+.bundle-toolbar-label {
+  font-size: 11px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.view-btn {
+  padding: 3px 10px;
+  font-size: 11px;
+  border-radius: 8px;
+  background: #eef1f7;
+  color: var(--text);
+  transform: none;
+}
+[data-theme="dark"] .view-btn { background: #2a2d3a; }
+.view-btn.active { background: var(--accent); color: #fff; }
+.view-btn:hover { transform: none; }
+
+.bundle-body { display: none; }
+.item.files-open .bundle-body { display: block; }
+
+.bundle-wrap.view-list .bundle-grid { display: none; }
+.bundle-wrap.view-grid .bundle-files { display: none; }
+
+.bundle-files {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.bundle-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+  gap: 8px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+.bundle-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 4px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fbfcff;
+  text-decoration: none;
+  color: inherit;
+  min-width: 0;
+  transition: border-color .15s;
+}
+[data-theme="dark"] .bundle-tile { background: #13161f; }
+.bundle-tile:hover { border-color: var(--accent); }
+.bundle-tile-thumb {
+  width: 48px;
+  height: 48px;
+  border-radius: 8px;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  background: var(--accent-soft);
+  font-size: 22px;
+}
+.bundle-tile-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  cursor: zoom-in;
+}
+.bundle-tile-name {
+  font-size: 10px;
+  font-weight: 600;
+  text-align: center;
+  width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.bundle-files li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 12px;
+  background: #fbfcff;
+}
+[data-theme="dark"] .bundle-files li { background: #13161f; }
+.bundle-files .bf-name {
+  flex: 1; min-width: 0;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.bundle-files .bf-size { color: var(--muted); font-size: 11px; flex-shrink: 0; }
+.bundle-files .bf-actions { display: flex; gap: 4px; flex-shrink: 0; }
+.bundle-files .bf-actions button {
+  padding: 3px 8px;
+  font-size: 11px;
+  border-radius: 7px;
+}
+
 .actions { display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }
 
 button {
@@ -291,8 +459,9 @@ body.multiselect .icon       { display: none; }
 /* 펼쳤을 때 미리보기 숨김 */
 .item.text-open .item-snippet { display: none; }
 
-/* 텍스트 아이템 상단 정렬 */
-.item:has(.item-snippet) { align-items: flex-start; }
+/* 텍스트·파일 묶음 상단 정렬 */
+.item:has(.item-snippet),
+.item:has(.bundle-wrap) { align-items: flex-start; }
 
 /* 텍스트 전체 보기 (펼치기) */
 .text-full {
@@ -369,8 +538,11 @@ body.multiselect .icon       { display: none; }
 }
 
 /* 멀티셀렉트 삭제 버튼 */
-#multiDeleteBtn { display: none; }
-body.multiselect #multiDeleteBtn { display: inline-flex; }
+#multiDeleteBtn,
+#multiMergeBtn { display: none; }
+body.multiselect #multiDeleteBtn,
+body.multiselect #multiMergeBtn { display: inline-flex; }
+#multiMergeBtn:disabled { opacity: .45; cursor: not-allowed; }
 
 .toast {
   position: fixed; left: 50%; bottom: 22px;
@@ -441,6 +613,23 @@ body.multiselect #multiDeleteBtn { display: inline-flex; }
 .email-box h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -.02em; }
 .email-modal-desc { margin: 0 0 16px; font-size: 13px; color: var(--muted); line-height: 1.5; }
 .email-actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+/* 합치기 모달 */
+.merge-modal {
+  position: fixed; inset: 0; background: rgba(0,0,0,.5);
+  display: grid; place-items: center; z-index: 200;
+  opacity: 0; pointer-events: none; transition: opacity .2s;
+}
+.merge-modal.open { opacity: 1; pointer-events: all; }
+.merge-box {
+  background: var(--card); border-radius: 20px;
+  padding: 28px; width: min(400px, 92vw);
+  box-shadow: 0 24px 64px rgba(0,0,0,.25);
+}
+.merge-box h3 { margin: 0 0 8px; font-size: 17px; letter-spacing: -.02em; }
+.merge-modal-desc { margin: 0 0 16px; font-size: 13px; color: var(--muted); line-height: 1.5; }
+.merge-box label { display: block; margin-bottom: 6px; font-size: 13px; font-weight: 700; }
+.merge-actions { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
 
 /* 수정 모달 */
 .edit-modal {

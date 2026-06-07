@@ -431,7 +431,7 @@ function getFilteredShares() {
   const type = document.getElementById('typeFilter').value;
   const now  = Date.now();
   return allShares.filter(item => {
-    if (type === 'file'    && item.type !== 'file')  return false;
+    if (type === 'file'    && item.type !== 'file' && item.type !== 'files') return false;
     if (type === 'text'    && item.type !== 'text')  return false;
     if (type === 'expired' && (!item.expires_at || new Date(item.expires_at) > now)) return false;
     if (kw && !`${item.title||''} ${item.owner_email||''}`.toLowerCase().includes(kw)) return false;
@@ -460,7 +460,7 @@ function renderUploads() {
     }
     tr.innerHTML = `
       <td><input type="checkbox" class="row-check" data-id="${item.id}" ${selectedIds.has(item.id) ? 'checked' : ''}></td>
-      <td style="font-size:1rem">${item.type === 'file' ? '📁' : '📝'}</td>
+      <td style="font-size:1rem">${item.type === 'text' ? '📝' : '📁'}</td>
       <td class="cell-title" title="${esc(item.title||'')}">${esc(item.title||'제목 없음')}</td>
       <td class="cell-email" title="${esc(item.owner_email||'')}">${esc(item.owner_email||'-')}</td>
       <td style="white-space:nowrap">${item.file_size != null ? formatBytes(item.file_size) : '-'}</td>
@@ -547,7 +547,8 @@ function renderUsers() {
     const email = item.owner_email || '(이메일 없음)';
     if (!map[email]) map[email] = { files: 0, texts: 0, size: 0, last: null };
     const u = map[email];
-    item.type === 'file' ? (u.files++, u.size += item.file_size || 0) : u.texts++;
+    if (item.type === 'text') u.texts++;
+    else { u.files++; u.size += item.file_size || 0; }
     const d = new Date(item.created_at);
     if (!u.last || d > u.last) u.last = d;
   });
@@ -672,9 +673,20 @@ function bindEvents() {
   document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
 }
 
+function getItemStoragePaths(item) {
+  if (item.type === 'files') {
+    try {
+      const data = JSON.parse(item.content || '{}');
+      return (data.files || []).map(f => f.path).filter(Boolean);
+    } catch { return []; }
+  }
+  if (item.type === 'file' && item.file_path) return [item.file_path];
+  return [];
+}
+
 async function deleteItem(item) {
-  if (item.type === 'file' && item.file_path)
-    await db.storage.from(BUCKET_NAME).remove([item.file_path]);
+  const paths = getItemStoragePaths(item);
+  if (paths.length) await db.storage.from(BUCKET_NAME).remove(paths);
   await db.from('shares').delete().eq('id', item.id);
 }
 

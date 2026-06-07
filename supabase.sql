@@ -3,7 +3,7 @@
 -- ============================================================
 create table if not exists shares (
   id          uuid        primary key default gen_random_uuid(),
-  type        text        not null check (type in ('file', 'text')),
+  type        text        not null check (type in ('file', 'files', 'text')),
   title       text,
   content     text,
   file_path   text,
@@ -22,12 +22,9 @@ alter table shares add column if not exists owner_token text;
 alter table shares add column if not exists owner_email text;
 alter table shares add column if not exists expires_at  timestamptz;
 
--- type CHECK 제약 추가 (중복 오류 무시)
-do $$ begin
-  alter table shares
-    add constraint shares_type_check check (type in ('file', 'text'));
-exception when duplicate_object then null;
-end $$;
+-- type CHECK 제약 (file=단일, files=다중 묶음, text=텍스트)
+alter table shares drop constraint if exists shares_type_check;
+alter table shares add constraint shares_type_check check (type in ('file', 'files', 'text'));
 
 -- ============================================================
 -- 인덱스 (D1)

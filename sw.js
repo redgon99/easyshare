@@ -1,4 +1,4 @@
-const CACHE = 'easyshare-v2';
+const CACHE = 'easyshare-v3';
 const STATIC_ASSETS = [
   './',
   './index.html',
