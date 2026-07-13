@@ -1,9 +1,10 @@
-const CACHE = 'easyshare-v3';
+const CACHE = 'easyshare-v10';
 const STATIC_ASSETS = [
   './',
   './index.html',
   './style.css',
   './config.js',
+  './shared.js',
   './app.js',
   './manifest.json',
   './icons/icon.svg',

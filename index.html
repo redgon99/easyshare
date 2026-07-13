@@ -13,10 +13,14 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default" />
   <meta name="apple-mobile-web-app-title" content="자료공유" />
   <link rel="apple-touch-icon" href="icons/icon.svg" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@9/marked.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.2/dist/umd/supabase.min.js"
+          integrity="sha384-sgcvElP/LlNRtORGYFLO/9K/bENcpJK19HgvqslWXog6d8f/Va4TpltGiBlGntCM" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@9.1.6/marked.min.js"
+          integrity="sha384-odPBjvtXVM/5hOYIr3A1dB+flh0c3wAT3bSesIOqEGmyUA4JoKf/YTWy0XKOYAY7" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.12/dist/purify.min.js"
+          integrity="sha384-piCcpDdJ7qVeK4Tv8Z6Hpcr3ZBIgP16TxQTPVfsLFdZ5uDgwc3Y8Ho7oUnqf12qu" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"
+          integrity="sha384-3zSEDfvllQohrq0PHL1fOXJuC/jSOO34H46t6UQfobFOmxE5BpjjaIJY5F2/bMnU" crossorigin="anonymous"></script>
 </head>
 <body>
   <!-- 라이트박스 -->
@@ -24,16 +28,15 @@
     <img id="lightboxImg" src="" alt="" />
   </div>
 
-  <!-- 이메일 설정 모달 -->
+  <!-- 계정 모달 -->
   <div class="email-modal" id="emailModal">
     <div class="email-box">
-      <h3>내 이메일 설정</h3>
-      <p class="email-modal-desc">이메일로 내가 올린 자료를 구분합니다.<br>실제 인증 없이 표시 용도로만 사용됩니다.</p>
-      <input id="emailModalInput" type="email" placeholder="you@example.com" />
+      <h3>내 계정</h3>
+      <p class="email-modal-desc">로그인된 계정입니다.</p>
+      <p class="account-email" id="accountEmail"></p>
       <div class="email-actions">
-        <button id="emailSaveBtn">저장</button>
-        <button class="secondary" id="emailClearBtn">삭제</button>
-        <button class="secondary" id="emailCancelBtn">취소</button>
+        <button class="danger" id="logoutBtn">로그아웃</button>
+        <button class="secondary" id="accountCancelBtn">닫기</button>
       </div>
     </div>
   </div>
@@ -94,12 +97,15 @@
         <p>파일과 텍스트를 드래그앤드롭으로<br>빠르게 공유합니다</p>
       </div>
       <div class="login-form-wrap">
-        <label for="loginEmailInput">이메일로 시작하기</label>
+        <label for="loginEmailInput">이메일</label>
         <input id="loginEmailInput" type="email" placeholder="you@example.com" autocomplete="email" />
+        <label for="loginPasswordInput">비밀번호</label>
+        <input id="loginPasswordInput" type="password" placeholder="6자 이상" autocomplete="current-password" />
         <p class="login-error" id="loginError"></p>
-        <button id="loginBtn">시작하기</button>
+        <button id="loginBtn">로그인</button>
+        <button class="secondary" id="signupBtn">회원가입</button>
       </div>
-      <p class="login-notice">이메일은 이 기기에만 저장되며 업로드한 자료에 표시됩니다.</p>
+      <p class="login-notice">처음이면 회원가입 후 인증 메일의 링크를 눌러주세요.<br>인증이 끝나면 자동으로 로그인됩니다.</p>
     </div>
   </div>
 
@@ -117,59 +123,34 @@
     </header>
 
     <section class="grid">
-      <!-- 파일 공유 -->
-      <div class="card">
-        <h2>파일 공유</h2>
-        <input id="fileTitleInput" class="title-input" type="text" placeholder="제목 (선택 사항)" />
-        <label class="dropzone" id="dropzone">
-          <input id="fileInput" type="file" multiple />
-          <div>
-            <strong>파일을 여기에 놓기</strong>
-            <span>또는 클릭해서 선택 · 최대 50 MB<br />Ctrl+V 로 클립보드 이미지도 붙여넣기 가능</span>
-          </div>
-        </label>
+      <!-- 새 게시물 (통합 작성기) -->
+      <div class="card full composer" id="composerCard">
+        <h2>새 게시물</h2>
+        <input id="composerTitle" class="title-input" type="text" placeholder="제목 (선택 사항)" />
+        <textarea id="composerText" rows="3"
+          placeholder="내용을 입력하거나, 파일을 여기로 끌어다 놓기 · Ctrl+V 붙여넣기 가능 · 마크다운 지원"></textarea>
+        <ul class="file-queue" id="fileQueue" hidden></ul>
         <div class="progress-wrap" id="progressWrap" hidden>
           <div class="progress-bar" id="progressBar"></div>
         </div>
-        <div class="file-row">
-          <label class="cam-btn">
-            📷 카메라
-            <input id="cameraInput" type="file" accept="image/*" capture="environment" />
+        <div class="composer-row">
+          <label class="attach-btn" title="파일 첨부">
+            📎<input id="fileInput" type="file" multiple hidden />
           </label>
-        </div>
-        <div class="expiry-row">
-          <span>만료:</span>
-          <select id="fileExpiry">
-            <option value="">만료 없음</option>
-            <option value="60">1시간</option>
-            <option value="1440">24시간</option>
-            <option value="10080">7일</option>
-          </select>
-        </div>
-        <ul class="file-queue" id="fileQueue" hidden></ul>
-        <div class="actions">
-          <button id="shareFilesBtn" disabled>파일 공유</button>
-          <button class="secondary" id="clearFilesBtn">비우기</button>
-        </div>
-      </div>
-
-      <!-- 텍스트 공유 -->
-      <div class="card">
-        <h2>텍스트 공유</h2>
-        <input id="titleInput" class="title-input" type="text" placeholder="제목 (선택 사항)" />
-        <textarea id="textInput" placeholder="메모, 링크, 코드 조각… 마크다운 지원"></textarea>
-        <div class="expiry-row">
-          <span>만료:</span>
-          <select id="textExpiry">
-            <option value="">만료 없음</option>
-            <option value="60">1시간</option>
-            <option value="1440">24시간</option>
-            <option value="10080">7일</option>
-          </select>
-        </div>
-        <div class="actions">
-          <button id="shareTextBtn">텍스트 공유</button>
-          <button class="secondary" id="clearTextBtn">비우기</button>
+          <label class="attach-btn" title="카메라 촬영">
+            📷<input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
+          </label>
+          <span class="expiry-row">만료:
+            <select id="postExpiry">
+              <option value="">없음</option>
+              <option value="60">1시간</option>
+              <option value="1440">24시간</option>
+              <option value="10080">7일</option>
+            </select>
+          </span>
+          <span class="composer-spacer"></span>
+          <button id="sharePostBtn">공유</button>
+          <button class="secondary" id="clearPostBtn">비우기</button>
         </div>
       </div>
 
@@ -186,11 +167,18 @@
               <option value="oldest">오래된순</option>
               <option value="size">크기순</option>
             </select>
-<button class="secondary" id="multiToggleBtn">선택</button>
+            <button class="secondary" id="multiCancelBtn">선택 취소</button>
             <button class="secondary" id="multiMergeBtn">합치기</button>
             <button class="danger" id="multiDeleteBtn">선택 삭제</button>
           </div>
         </div>
+        <div class="filter-chips" id="filterChips">
+          <button class="chip active" data-filter="all">전체</button>
+          <button class="chip" data-filter="files">📎 파일</button>
+          <button class="chip" data-filter="text">📝 텍스트</button>
+          <button class="chip" data-filter="image">🖼️ 이미지</button>
+        </div>
+        <div class="suggest-bar" id="suggestBar" hidden></div>
         <div class="list" id="shareList"></div>
         <button class="secondary load-more" id="loadMoreBtn" hidden>더 보기</button>
       </div>
@@ -200,6 +188,7 @@
   <div class="toast" id="toast"></div>
 
   <script src="config.js"></script>
+  <script src="shared.js"></script>
   <script src="app.js"></script>
   <script>
     if ('serviceWorker' in navigator) {

@@ -2,30 +2,33 @@ const TITLE_MAX_LEN = 28;
 const FILE_SIZE_MAX = 50 * 1024 * 1024;
 const PAGE_SIZE     = 20;
 
-// 소유권 토큰 (이 기기에서 올린 항목만 삭제/수정 가능)
-let OWNER_TOKEN = localStorage.getItem("ownerToken");
-if (!OWNER_TOKEN) { OWNER_TOKEN = generateId(); localStorage.setItem("ownerToken", OWNER_TOKEN); }
-
+// Supabase Auth 세션이 소유권의 기준. RLS는 auth.uid()로 검증한다.
 const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const dropzone       = document.querySelector("#dropzone");
+let CURRENT_USER = null;   // supabase auth user 객체
+let OWNER_EMAIL  = "";     // CURRENT_USER.email (표시·필터용)
+
+function setUser(user) {
+  CURRENT_USER = user || null;
+  OWNER_EMAIL  = normalizeEmail(user?.email || "");
+}
+
+const composerCard   = document.querySelector("#composerCard");
+const composerTitle  = document.querySelector("#composerTitle");
+const composerText   = document.querySelector("#composerText");
 const fileInput      = document.querySelector("#fileInput");
-const fileTitleInput = document.querySelector("#fileTitleInput");
 const cameraInput    = document.querySelector("#cameraInput");
-const fileExpiry     = document.querySelector("#fileExpiry");
+const postExpiry     = document.querySelector("#postExpiry");
 const fileQueueEl    = document.querySelector("#fileQueue");
-const shareFilesBtn  = document.querySelector("#shareFilesBtn");
-const clearFilesBtn  = document.querySelector("#clearFilesBtn");
-const textInput      = document.querySelector("#textInput");
-const titleInput     = document.querySelector("#titleInput");
-const textExpiry     = document.querySelector("#textExpiry");
-const shareTextBtn   = document.querySelector("#shareTextBtn");
-const clearTextBtn   = document.querySelector("#clearTextBtn");
+const sharePostBtn   = document.querySelector("#sharePostBtn");
+const clearPostBtn   = document.querySelector("#clearPostBtn");
 const shareList      = document.querySelector("#shareList");
 const loadMoreBtn    = document.querySelector("#loadMoreBtn");
 const searchInput    = document.querySelector("#searchInput");
 const sortSelect     = document.querySelector("#sortSelect");
-const multiToggleBtn = document.querySelector("#multiToggleBtn");
+const filterChips    = document.querySelector("#filterChips");
+const suggestBar     = document.querySelector("#suggestBar");
+const multiCancelBtn = document.querySelector("#multiCancelBtn");
 const multiMergeBtn  = document.querySelector("#multiMergeBtn");
 const multiDeleteBtn = document.querySelector("#multiDeleteBtn");
 const mergeModal     = document.querySelector("#mergeModal");
@@ -46,10 +49,6 @@ const qrLabel        = document.querySelector("#qrLabel");
 const qrClose        = document.querySelector("#qrClose");
 const profileBtn     = document.querySelector("#profileBtn");
 const emailModal     = document.querySelector("#emailModal");
-const emailModalInput = document.querySelector("#emailModalInput");
-const emailSaveBtn   = document.querySelector("#emailSaveBtn");
-const emailClearBtn  = document.querySelector("#emailClearBtn");
-const emailCancelBtn = document.querySelector("#emailCancelBtn");
 const editModal        = document.querySelector("#editModal");
 const editModalHeading = document.querySelector("#editModalHeading");
 const editTextFields   = document.querySelector("#editTextFields");
@@ -61,18 +60,22 @@ const editFileInput    = document.querySelector("#editFileInput");
 const editFilePickLabel = document.querySelector("#editFilePickLabel");
 const editSaveBtn      = document.querySelector("#editSaveBtn");
 const editCancelBtn    = document.querySelector("#editCancelBtn");
-let OWNER_EMAIL = normalizeEmail(localStorage.getItem('ownerEmail') || '');
 let editingItem = null;
 
-// 이메일 유무에 따라 로그인 화면 또는 앱을 즉시 표시
-document.getElementById('loginScreen').hidden = !!OWNER_EMAIL;
-document.querySelector('.app').hidden = !OWNER_EMAIL;
+// 공유 링크(?share=id)로 접근하면 로그인 없이 해당 게시물만 표시
+const SHARE_VIEW_ID = new URLSearchParams(location.search).get("share");
+
+// 저장된 세션 유무로 초기 화면을 추정 (getSession 확정 전 깜빡임 방지)
+const HAS_SESSION_HINT = Object.keys(localStorage).some(k => k.startsWith("sb-") && k.endsWith("-auth-token"));
+document.getElementById('loginScreen').hidden = HAS_SESSION_HINT || !!SHARE_VIEW_ID;
+document.querySelector('.app').hidden = !HAS_SESSION_HINT && !SHARE_VIEW_ID;
 
 let shares       = [];
 let displayCount = PAGE_SIZE;
 let rtChannel    = null;
 let isUploading  = false;
 let selectedIds  = new Set();
+let activeFilter = "all";
 /** @type {{ id: string, file: File }[]} */
 let fileQueue    = [];
 /** @type {Map<string, 'list'|'grid'>} */
@@ -82,14 +85,63 @@ init();
 
 async function init() {
   loadTheme();
-  if (!OWNER_EMAIL) {
-    document.getElementById('loginBtn').addEventListener('click', enterApp);
-    document.getElementById('loginEmailInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter') enterApp();
-    });
+  if (SHARE_VIEW_ID) {
+    await startShareView(SHARE_VIEW_ID);
     return;
   }
-  await startApp();
+
+  supabaseClient.auth.onAuthStateChange((event) => {
+    if (event === "SIGNED_OUT") location.reload();
+  });
+
+  const { data: { session } } = await supabaseClient.auth.getSession();
+  if (session) {
+    setUser(session.user);
+    document.getElementById('loginScreen').hidden = true;
+    document.querySelector('.app').hidden = false;
+    await startApp();
+    return;
+  }
+
+  document.getElementById('loginScreen').hidden = false;
+  document.querySelector('.app').hidden = true;
+  document.getElementById('loginBtn').addEventListener('click', () => submitAuth('login'));
+  document.getElementById('signupBtn').addEventListener('click', () => submitAuth('signup'));
+  document.getElementById('loginPasswordInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') submitAuth('login');
+  });
+}
+
+// ── 공유 링크 보기 ───────────────────────────────────────
+async function startShareView(id) {
+  document.body.classList.add("share-view");
+  bindEvents();
+
+  const banner = document.createElement("div");
+  banner.className = "share-banner";
+  banner.innerHTML = `🔗 공유된 게시물입니다. <a href="${location.pathname}">전체 자료함 열기</a>`;
+  shareList.closest(".card").prepend(banner);
+
+  renderSkeleton();
+  const { data, error } = await supabaseClient
+    .from("shares").select("*").eq("id", id).maybeSingle();
+
+  shareList.replaceChildren();
+  if (error || !data || (data.expires_at && new Date(data.expires_at) <= new Date())) {
+    const empty = document.createElement("div");
+    empty.className = "empty";
+    empty.textContent = "게시물을 찾을 수 없거나 만료되었습니다.";
+    shareList.appendChild(empty);
+    statusBadge.textContent = "공유 보기";
+    return;
+  }
+  shares = [data];
+  statusBadge.textContent = "공유 보기";
+  shareList.appendChild(createItemEl(data));
+}
+
+function shareLinkFor(id) {
+  return `${location.origin}${location.pathname}?share=${id}`;
 }
 
 async function startApp() {
@@ -97,8 +149,15 @@ async function startApp() {
   updateProfileBtn();
   logVisit();
   renderSkeleton();
+  await claimMyShares();
   await loadShares();
   subscribeRealtime();
+}
+
+/** 계정 도입 전 자료(owner_email 일치)를 내 계정으로 연결 */
+async function claimMyShares() {
+  const { data, error } = await supabaseClient.rpc("claim_my_shares");
+  if (!error && data > 0) showToast(`기존 자료 ${data}개를 계정에 연결했습니다`);
 }
 
 function logVisit() {
@@ -108,18 +167,47 @@ function logVisit() {
   }).then(() => {});
 }
 
-async function enterApp() {
-  const input = document.getElementById('loginEmailInput');
-  const errEl = document.getElementById('loginError');
-  const email = input.value.trim();
+async function submitAuth(mode) {
+  const emailInput = document.getElementById('loginEmailInput');
+  const pwInput    = document.getElementById('loginPasswordInput');
+  const errEl      = document.getElementById('loginError');
+  const email      = normalizeEmail(emailInput.value);
+  const password   = pwInput.value;
+
   if (!email || !email.includes('@')) {
     errEl.textContent = '올바른 이메일 주소를 입력하세요.';
-    input.focus();
+    emailInput.focus();
     return;
   }
+  if (!password || password.length < 6) {
+    errEl.textContent = '비밀번호는 6자 이상이어야 합니다.';
+    pwInput.focus();
+    return;
+  }
+  errEl.classList.remove('ok');
+  errEl.textContent = '처리 중…';
+
+  const { data, error } = mode === 'signup'
+    ? await supabaseClient.auth.signUp({
+        email, password,
+        // 인증 메일의 링크를 누르면 이 앱으로 돌아와 자동 로그인됨
+        options: { emailRedirectTo: location.origin + location.pathname },
+      })
+    : await supabaseClient.auth.signInWithPassword({ email, password });
+
+  if (error) {
+    errEl.textContent = translateAuthError(error);
+    return;
+  }
+  if (!data.session) {
+    // Confirm email 사용: 세션 없이 가입만 완료된 상태
+    errEl.classList.add('ok');
+    errEl.textContent = '인증 메일을 보냈습니다. 메일함(스팸함 포함)에서 링크를 누르면 자동으로 로그인됩니다.';
+    return;
+  }
+
+  setUser(data.session.user);
   errEl.textContent = '';
-  OWNER_EMAIL = normalizeEmail(email);
-  localStorage.setItem('ownerEmail', OWNER_EMAIL);
   const ls = document.getElementById('loginScreen');
   ls.classList.add('fade-out');
   setTimeout(async () => {
@@ -129,16 +217,27 @@ async function enterApp() {
   }, 300);
 }
 
+function translateAuthError(error) {
+  const msg = error?.message || '';
+  if (/invalid login credentials/i.test(msg))    return '이메일 또는 비밀번호가 올바르지 않습니다.';
+  if (/already registered/i.test(msg))           return '이미 가입된 이메일입니다. 로그인해 주세요.';
+  if (/email.*invalid|invalid.*email/i.test(msg)) return '사용할 수 없는 이메일 주소입니다.';
+  if (/password.*(short|least)/i.test(msg))      return '비밀번호가 너무 짧습니다 (6자 이상).';
+  if (/rate limit|too many/i.test(msg))          return '요청이 너무 잦습니다. 잠시 후 다시 시도하세요.';
+  if (/not confirmed/i.test(msg))                return '이메일 인증이 완료되지 않은 계정입니다.';
+  return `오류: ${msg}`;
+}
+
 // ── 이벤트 바인딩 ────────────────────────────────────────
 function bindEvents() {
-  // 드롭존 드래그
+  // 작성기 카드 = 드롭존
   ["dragenter","dragover"].forEach(evt =>
-    dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.add("dragover"); })
+    composerCard.addEventListener(evt, e => { e.preventDefault(); composerCard.classList.add("dragover"); })
   );
   ["dragleave","drop"].forEach(evt =>
-    dropzone.addEventListener(evt, e => { e.preventDefault(); dropzone.classList.remove("dragover"); })
+    composerCard.addEventListener(evt, e => { e.preventDefault(); composerCard.classList.remove("dragover"); })
   );
-  dropzone.addEventListener("drop", e => queueFiles([...e.dataTransfer.files]));
+  composerCard.addEventListener("drop", e => queueFiles([...e.dataTransfer.files]));
   fileInput.addEventListener("change",   e => { queueFiles([...e.target.files]); fileInput.value = ""; });
   cameraInput.addEventListener("change", e => { queueFiles([...e.target.files]); cameraInput.value = ""; });
 
@@ -152,7 +251,7 @@ function bindEvents() {
   document.addEventListener("dragover",  e => e.preventDefault());
   document.addEventListener("drop", e => {
     document.body.classList.remove("page-dragover");
-    if (e.target.closest("#dropzone")) return;
+    if (e.target.closest("#composerCard")) return;
     const files = [...(e.dataTransfer?.files || [])];
     if (files.length) { e.preventDefault(); queueFiles(files); }
   });
@@ -167,30 +266,35 @@ function bindEvents() {
     }
   });
 
-  // 파일 공유
-  shareFilesBtn.addEventListener("click", shareQueuedFiles);
-  clearFilesBtn.addEventListener("click", clearFileQueue);
+  // 게시물 공유
+  sharePostBtn.addEventListener("click", sharePost);
+  clearPostBtn.addEventListener("click", clearComposer);
   fileQueueEl.addEventListener("click", e => {
     const btn = e.target.closest("[data-queue-remove]");
     if (!btn) return;
     removeFromFileQueue(btn.dataset.queueRemove);
   });
 
-  // 텍스트 공유
-  shareTextBtn.addEventListener("click", shareText);
-  clearTextBtn.addEventListener("click", () => { textInput.value = ""; titleInput.value = ""; });
-
-  // 검색 / 정렬
+  // 검색 / 정렬 / 필터
   searchInput.addEventListener("input", () => { displayCount = PAGE_SIZE; renderShares(); });
   sortSelect.addEventListener("change",  () => { displayCount = PAGE_SIZE; renderShares(); });
+  filterChips.addEventListener("click", e => {
+    const chip = e.target.closest(".chip");
+    if (!chip) return;
+    activeFilter = chip.dataset.filter;
+    filterChips.querySelectorAll(".chip").forEach(c => c.classList.toggle("active", c === chip));
+    displayCount = PAGE_SIZE;
+    renderShares();
+  });
 
   // 더 보기
   loadMoreBtn.addEventListener("click", () => { displayCount += PAGE_SIZE; renderShares(); });
 
   // 멀티셀렉트
-  multiToggleBtn.addEventListener("click", toggleMultiSelect);
+  multiCancelBtn.addEventListener("click", () => { exitMultiSelect(); renderShares(); });
   multiMergeBtn.addEventListener("click", openMergeModal);
   multiDeleteBtn.addEventListener("click", deleteSelected);
+
   mergeConfirmBtn.addEventListener("click", confirmMerge);
   mergeCancelBtn.addEventListener("click", closeMergeModal);
   mergeModal.addEventListener("click", e => { if (e.target === mergeModal) closeMergeModal(); });
@@ -206,7 +310,7 @@ function bindEvents() {
     if (e.key === "Escape") {
       lightbox.classList.remove("open");
       qrModal.classList.remove("open");
-      closeEmailModal();
+      closeAccountModal();
       closeEditModal();
       closeMergeModal();
     }
@@ -219,13 +323,11 @@ function bindEvents() {
   // 다크모드
   themeBtn.addEventListener("click", toggleTheme);
 
-  // 프로필 / 이메일
-  profileBtn.addEventListener("click", openEmailModal);
-  emailSaveBtn.addEventListener("click", saveEmail);
-  emailClearBtn.addEventListener("click", clearEmail);
-  emailCancelBtn.addEventListener("click", closeEmailModal);
-  emailModalInput.addEventListener("keydown", e => { if (e.key === "Enter") saveEmail(); });
-  emailModal.addEventListener("click", e => { if (e.target === emailModal) closeEmailModal(); });
+  // 프로필 / 계정
+  profileBtn.addEventListener("click", openAccountModal);
+  document.getElementById("logoutBtn").addEventListener("click", logout);
+  document.getElementById("accountCancelBtn").addEventListener("click", closeAccountModal);
+  emailModal.addEventListener("click", e => { if (e.target === emailModal) closeAccountModal(); });
 
   editSaveBtn.addEventListener("click", saveEdit);
   editCancelBtn.addEventListener("click", closeEditModal);
@@ -242,21 +344,15 @@ function bindEvents() {
     }
   });
 
+  bindLongPress();
 }
 
-function normalizeEmail(email) {
-  return (email || "").trim().toLowerCase();
-}
-
-function isSameAccount(item) {
-  if (!OWNER_EMAIL || !item.owner_email) return false;
-  return normalizeEmail(item.owner_email) === OWNER_EMAIL;
-}
-
-/** 같은 이메일 계정이거나, 이 기기 토큰으로 올린 항목(이메일 없는 구 데이터) */
+/** RLS 정책과 동일한 기준: 내 계정(user_id) 소유이거나 완전 무소유 레거시 */
 function isItemOwner(item) {
-  if (isSameAccount(item)) return true;
-  return item.owner_token === OWNER_TOKEN || !item.owner_token;
+  if (!CURRENT_USER) return false;
+  if (item.user_id) return item.user_id === CURRENT_USER.id;
+  if (item.owner_email) return normalizeEmail(item.owner_email) === OWNER_EMAIL;
+  return !item.owner_token;
 }
 
 // ── 다크모드 ─────────────────────────────────────────────
@@ -275,30 +371,19 @@ function applyTheme(t) {
   themeBtn.textContent = t === "dark" ? "☀️" : "🌙";
 }
 
-// ── 이메일 / 프로필 ──────────────────────────────────────
-function openEmailModal() {
-  emailModalInput.value = OWNER_EMAIL;
+// ── 계정 / 프로필 ────────────────────────────────────────
+function openAccountModal() {
+  document.getElementById("accountEmail").textContent = OWNER_EMAIL || "-";
   emailModal.classList.add("open");
-  setTimeout(() => emailModalInput.focus(), 50);
 }
-function closeEmailModal() {
+function closeAccountModal() {
   emailModal.classList.remove("open");
 }
-function saveEmail() {
-  const val = normalizeEmail(emailModalInput.value);
-  OWNER_EMAIL = val;
-  if (val) localStorage.setItem('ownerEmail', val);
-  else localStorage.removeItem('ownerEmail');
-  updateProfileBtn();
-  closeEmailModal();
-  showToast(val ? `이메일 설정: ${val}` : '이메일이 삭제되었습니다');
-}
-function clearEmail() {
-  OWNER_EMAIL = '';
-  localStorage.removeItem('ownerEmail');
-  closeEmailModal();
-  showToast('이메일이 삭제되었습니다');
-  setTimeout(() => location.reload(), 900);
+async function logout() {
+  closeAccountModal();
+  showToast("로그아웃 중…");
+  await supabaseClient.auth.signOut();
+  location.reload();
 }
 function updateProfileBtn() {
   if (OWNER_EMAIL) {
@@ -309,19 +394,12 @@ function updateProfileBtn() {
     profileBtn.style.cssText = '';
   }
 }
-function getInitial(email) {
-  return email ? email[0].toUpperCase() : '';
-}
-function getAvatarColor(email) {
-  const colors = ['#2563eb','#7c3aed','#db2777','#059669','#d97706','#dc2626','#0891b2'];
-  let h = 0;
-  for (let i = 0; i < email.length; i++) h = email.charCodeAt(i) + ((h << 5) - h);
-  return colors[Math.abs(h) % colors.length];
-}
-
 // ── 멀티셀렉트 ───────────────────────────────────────────
+// 체크박스는 항목에 마우스를 올리면 나타나고(모바일은 길게 누르기),
+// 하나라도 선택되면 전체 체크박스와 합치기/삭제 버튼이 표시된다.
 function updateMultiSelectUi() {
   const n = selectedIds.size;
+  document.body.classList.toggle("multiselect", n > 0);
   multiDeleteBtn.textContent = `선택 삭제 (${n})`;
   multiMergeBtn.textContent = `합치기 (${n})`;
   multiMergeBtn.disabled = n < 2;
@@ -329,16 +407,6 @@ function updateMultiSelectUi() {
 
 function exitMultiSelect() {
   selectedIds.clear();
-  document.body.classList.remove("multiselect");
-  multiToggleBtn.textContent = "선택";
-  updateMultiSelectUi();
-}
-
-function toggleMultiSelect() {
-  const on = !document.body.classList.contains("multiselect");
-  document.body.classList.toggle("multiselect", on);
-  multiToggleBtn.textContent = on ? "선택 취소" : "선택";
-  if (!on) { selectedIds.clear(); renderShares(); }
   updateMultiSelectUi();
 }
 
@@ -350,6 +418,24 @@ function handleItemCheck(e) {
   cb.checked ? selectedIds.add(id) : selectedIds.delete(id);
   cb.closest(".item").classList.toggle("selected", cb.checked);
   updateMultiSelectUi();
+}
+
+// 모바일: 항목을 길게 누르면 선택 토글
+let longPressTimer = null;
+function bindLongPress() {
+  shareList.addEventListener("pointerdown", e => {
+    const itemEl = e.target.closest(".item");
+    if (!itemEl || e.target.closest("button, a, input")) return;
+    longPressTimer = setTimeout(() => {
+      const cb = itemEl.querySelector(".item-check");
+      if (!cb) return;
+      cb.checked = !cb.checked;
+      cb.dispatchEvent(new Event("change", { bubbles: true }));
+    }, 500);
+  });
+  ["pointerup", "pointermove", "pointercancel"].forEach(evt =>
+    shareList.addEventListener(evt, () => clearTimeout(longPressTimer))
+  );
 }
 
 function getMergeTargets() {
@@ -366,16 +452,12 @@ function openMergeModal() {
     showToast("이 계정의 자료만 합칠 수 있습니다.");
     return;
   }
-  if (!targets.every(isFileShare)) {
-    showToast("파일 항목만 합칠 수 있습니다.");
-    return;
-  }
   const fileCount = targets.reduce((n, item) => n + getShareFiles(item).length, 0);
-  if (fileCount < 2) {
-    showToast("합칠 파일이 2개 이상 필요합니다.");
-    return;
-  }
-  mergeModalDesc.textContent = `선택한 ${targets.length}개 항목(파일 ${fileCount}개)을 하나로 합칩니다.`;
+  const textCount = targets.filter(t => getShareText(t)).length;
+  const parts = [];
+  if (fileCount) parts.push(`파일 ${fileCount}개`);
+  if (textCount) parts.push(`글 ${textCount}개`);
+  mergeModalDesc.textContent = `선택한 ${targets.length}개 항목(${parts.join(", ")})을 하나로 합칩니다.`;
   mergeTitleInput.value = "";
   mergeModal.classList.add("open");
   setTimeout(() => mergeTitleInput.focus(), 50);
@@ -394,7 +476,8 @@ async function confirmMerge() {
   if (targets.length < 2) { closeMergeModal(); return; }
 
   mergeConfirmBtn.disabled = true;
-  const sorted = [...targets].sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+  // 오래된 항목부터 순서대로 이어붙인다
+  const sorted = [...targets].sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
   const seen = new Set();
   const files = [];
   for (const item of sorted) {
@@ -404,8 +487,11 @@ async function confirmMerge() {
       files.push(f);
     }
   }
-  if (files.length < 2) {
-    showToast("합칠 파일이 2개 이상 필요합니다.");
+  const texts = sorted.map(getShareText).filter(Boolean);
+  const content = texts.join("\n\n---\n\n") || null;
+
+  if (!files.length && !content) {
+    showToast("합칠 내용이 없습니다.");
     mergeConfirmBtn.disabled = false;
     return;
   }
@@ -416,14 +502,16 @@ async function confirmMerge() {
   const expiresAt = expiries.length ? new Date(Math.min(...expiries)).toISOString() : null;
 
   const { error: insertError } = await supabaseClient.from("shares").insert({
-    type: "files",
+    type: files.length ? "files" : "text",
     title,
-    content: JSON.stringify({ files }),
-    file_path: first.path,
-    file_url: first.url,
-    file_size: totalSize,
-    mime_type: first.mime,
-    owner_token: OWNER_TOKEN,
+    content,
+    files: files.length ? files : null,
+    file_path: first?.path ?? null,
+    file_url: first?.url ?? null,
+    file_name: first?.name ?? null,
+    file_size: files.length ? totalSize : null,
+    mime_type: first?.mime ?? null,
+    user_id: CURRENT_USER.id,
     owner_email: OWNER_EMAIL || null,
     ...(expiresAt && { expires_at: expiresAt }),
   });
@@ -466,43 +554,35 @@ async function handleItemAction(e) {
   const itemEl = btn.closest(".item");
   const item   = shares.find(s => s.id === itemEl?.dataset.id);
 
-  if (action === "copy"            && item) { await copyToClipboard(item.content); }
-  if (action === "copy-url"        && item) {
-    const urls = getShareFiles(item).map(f => f.url).filter(Boolean);
-    await copyToClipboard(urls.length ? urls.join("\n") : (item.file_url || ""));
+  if (action === "more") {
+    const acts = btn.closest(".item-actions");
+    const open = acts.classList.toggle("open");
+    btn.textContent = open ? "−" : "+";
+    btn.title = open ? "접기" : "더 보기";
   }
-  if (action === "copy-file-url"   && btn.dataset.url) { await copyToClipboard(btn.dataset.url); }
-  if (action === "delete-request"          ) { showDeleteConfirm(btn); }
-  if (action === "delete-confirm"  && item) { await deleteShare(item, itemEl); }
-  if (action === "delete-cancel"           ) { resetDeleteBtn(itemEl); }
+  if (action === "copy"            && item) { await copyToClipboard(getShareText(item) || item.title || ""); }
+  if (action === "share-link"      && item) {
+    await copyToClipboard(shareLinkFor(item.id));
+    showToast("공유 링크가 복사되었습니다");
+  }
+  if (action === "delete"          && item) {
+    if (confirm(`"${item.title || "제목 없음"}" 항목을 삭제할까요?`)) await deleteShare(item);
+  }
   if (action === "expand"                  ) { toggleExpand(btn); }
   if (action === "view-list" || action === "view-grid") { setBundleView(itemEl, action === "view-list" ? "list" : "grid"); }
   if (action === "show-qr"         && item) {
     const files = getShareFiles(item);
-    openQr(files[0]?.url || item.file_url || item.content || "");
+    const text  = getShareText(item);
+    if (files.length === 1 && !text) openQr(files[0].url);
+    else if (!files.length && text)  openQr(text);
+    else                             openQr(shareLinkFor(item.id));
   }
   if (action === "edit"            && item) { openEditModal(item); }
 }
 
-function showDeleteConfirm(deleteBtn) {
-  deleteBtn.dataset.action = "delete-confirm";
-  deleteBtn.textContent    = "정말 삭제?";
-  const cancelBtn = document.createElement("button");
-  cancelBtn.className = "secondary"; cancelBtn.dataset.action = "delete-cancel"; cancelBtn.textContent = "취소";
-  deleteBtn.insertAdjacentElement("afterend", cancelBtn);
-  deleteBtn._cancelTimer = setTimeout(() => resetDeleteBtn(deleteBtn.closest(".item")), 4000);
-}
-function resetDeleteBtn(itemEl) {
-  const cb = itemEl?.querySelector('[data-action="delete-confirm"]');
-  const cc = itemEl?.querySelector('[data-action="delete-cancel"]');
-  if (cb) { clearTimeout(cb._cancelTimer); cb.dataset.action = "delete-request"; cb.textContent = "삭제"; }
-  cc?.remove();
-}
-
 function toggleExpand(btn) {
   const item = btn.closest(".item");
-  const openClass = item.querySelector(".bundle-wrap") ? "files-open" : "text-open";
-  const expanded = item.classList.toggle(openClass);
+  const expanded = item.classList.toggle("open");
   btn.textContent = expanded ? "접기" : "펼치기";
 }
 
@@ -538,7 +618,7 @@ function buildBundleListEl(files) {
     openB.textContent = "열기";
     openA.appendChild(openB);
     const dlA = document.createElement("a");
-    dlA.href = f.url; dlA.download = f.name; dlA.rel = "noreferrer";
+    dlA.href = fileDownloadUrl(f.url, f.name); dlA.download = f.name; dlA.rel = "noreferrer";
     const dlB = document.createElement("button");
     dlB.className = "secondary"; dlB.textContent = "↓";
     dlA.appendChild(dlB);
@@ -600,34 +680,22 @@ function openEditModal(item) {
   editFileInput.closest(".edit-file-pick")?.classList.remove("has-file");
   editFilePickLabel.textContent = "새 파일 선택";
 
-  if (item.type === "text" && !isBundleShare(item)) {
-    editModalHeading.textContent = "텍스트 수정";
-    editTextFields.hidden = false;
-    editFileFields.hidden = true;
-    editContentInput.hidden = false;
-    const contentLabelT = editContentInput.previousElementSibling;
-    if (contentLabelT?.tagName === "LABEL") contentLabelT.hidden = false;
-    editTitleInput.value = item.title || "";
-    editContentInput.value = item.content || "";
-    setTimeout(() => editTitleInput.focus(), 50);
-  } else if (isBundleShare(item)) {
-    editModalHeading.textContent = "파일 묶음 수정";
-    editTextFields.hidden = false;
-    editFileFields.hidden = true;
-    editContentInput.hidden = true;
-    editTitleInput.value = item.title || "";
-    editContentInput.value = "";
-    const contentLabel = editContentInput.previousElementSibling;
-    if (contentLabel?.tagName === "LABEL") contentLabel.hidden = true;
-    setTimeout(() => editTitleInput.focus(), 50);
-  } else {
-    editModalHeading.textContent = "파일 교체";
-    editTextFields.hidden = true;
+  const files = getShareFiles(item);
+  editModalHeading.textContent = "게시물 수정";
+  editTextFields.hidden = false;
+  editTitleInput.value = item.title || "";
+  editContentInput.value = getShareText(item);
+
+  // 파일 교체는 단일 첨부일 때만 지원
+  if (files.length === 1) {
     editFileFields.hidden = false;
-    editContentInput.hidden = false;
-    editFileCurrent.textContent = `현재 파일: ${item.title || "제목 없음"}${item.file_size != null ? ` (${formatBytes(item.file_size)})` : ""}`;
+    editFileCurrent.textContent = `현재 파일: ${files[0].name}${files[0].size != null ? ` (${formatBytes(files[0].size)})` : ""}`;
+  } else {
+    editFileFields.hidden = true;
   }
+
   editModal.classList.add("open");
+  setTimeout(() => editTitleInput.focus(), 50);
 }
 
 function closeEditModal() {
@@ -642,40 +710,36 @@ async function saveEdit() {
 
   editSaveBtn.disabled = true;
   try {
-    if (editingItem.type === "text" && !isBundleShare(editingItem)) {
-      const content = editContentInput.value.trim();
-      if (!content) { showToast("내용을 입력하세요."); return; }
-      const rawTitle = editTitleInput.value.trim();
-      const title = rawTitle || (content.length > TITLE_MAX_LEN ? content.slice(0, TITLE_MAX_LEN) + "…" : content);
-      const { error } = await supabaseClient.from("shares").update({ title, content }).eq("id", editingItem.id);
-      if (error) { showToast("수정 실패"); return; }
-      editingItem.title = title;
-      editingItem.content = content;
-      showToast("수정 완료");
+    const files   = getShareFiles(editingItem);
+    const content = editContentInput.value.trim();
+    if (!content && !files.length) { showToast("내용을 입력하세요."); return; }
+
+    const rawTitle = editTitleInput.value.trim();
+    const title = rawTitle
+      || (content ? (content.length > TITLE_MAX_LEN ? content.slice(0, TITLE_MAX_LEN) + "…" : content)
+                  : (files[0]?.name || "제목 없음"));
+
+    const { error } = await supabaseClient.from("shares")
+      .update({ title, content: content || null })
+      .eq("id", editingItem.id);
+    if (error) { showToast("수정 실패"); return; }
+    editingItem.title = title;
+    editingItem.content = content || null;
+
+    // 단일 첨부이고 새 파일을 골랐으면 파일도 교체
+    const newFile = editFileInput.files?.[0];
+    if (files.length === 1 && newFile) {
+      const ok = await replaceFileItem(editingItem, newFile);
+      if (!ok) return;
+      showToast("파일 교체 완료");
       closeEditModal();
-      renderShares();
-    } else if (isBundleShare(editingItem)) {
-      const title = editTitleInput.value.trim();
-      if (!title) { showToast("제목을 입력하세요."); return; }
-      const patch = { title };
-      if (editingItem.type !== "files") patch.type = "files";
-      const { error } = await supabaseClient.from("shares").update(patch).eq("id", editingItem.id);
-      if (error) { showToast("수정 실패"); return; }
-      editingItem.title = title;
-      editingItem.type = "files";
-      showToast("제목 수정 완료");
-      closeEditModal();
-      renderShares();
-    } else {
-      const file = editFileInput.files?.[0];
-      if (!file) { showToast("교체할 파일을 선택하세요."); return; }
-      const ok = await replaceFileItem(editingItem, file);
-      if (ok) {
-        showToast("파일 교체 완료");
-        closeEditModal();
-        await loadShares();
-      }
+      await loadShares();
+      return;
     }
+
+    showToast("수정 완료");
+    closeEditModal();
+    renderShares();
   } finally {
     editSaveBtn.disabled = false;
   }
@@ -692,30 +756,35 @@ async function replaceFileItem(item, file) {
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
   const path = `${Date.now()}-${generateId()}-${safeName}`;
 
-  setProgress(0);
+  showProgress(true);
   showToast(`${file.name} 업로드 중…`);
 
-  const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, {
-    upsert: false,
-    onUploadProgress: p => setProgress(Math.round((p.loaded / p.total) * 100)),
-  });
+  const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, { upsert: false });
 
   if (uploadError) {
-    setProgress(null);
+    showProgress(false);
     showToast(`업로드 실패: ${file.name}`);
     return false;
   }
 
   const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(path);
+  const newFile = {
+    path,
+    url: urlData.publicUrl,
+    name: file.name,
+    size: file.size,
+    mime: file.type || "application/octet-stream",
+  };
   const { error: updateError } = await supabaseClient.from("shares").update({
-    title: file.name,
+    files: [newFile],
     file_path: path,
-    file_url: urlData.publicUrl,
+    file_url: newFile.url,
+    file_name: file.name,
     file_size: file.size,
-    mime_type: file.type || "application/octet-stream",
+    mime_type: newFile.mime,
   }).eq("id", item.id);
 
-  setProgress(null);
+  showProgress(false);
 
   if (updateError) {
     await supabaseClient.storage.from(BUCKET_NAME).remove([path]);
@@ -732,11 +801,11 @@ async function replaceFileItem(item, file) {
 // ── 업로드 ───────────────────────────────────────────────
 function lockUpload(lock) {
   isUploading = lock;
-  dropzone.classList.toggle("locked", lock);
+  composerCard.classList.toggle("locked", lock);
   fileInput.disabled    = lock;
   cameraInput.disabled  = lock;
-  shareFilesBtn.disabled = lock || fileQueue.length === 0;
-  clearFilesBtn.disabled = lock;
+  sharePostBtn.disabled = lock;
+  clearPostBtn.disabled = lock;
 }
 
 function calcExpiresAt(minutesStr) {
@@ -773,9 +842,10 @@ function removeFromFileQueue(id) {
   renderFileQueue();
 }
 
-function clearFileQueue() {
+function clearComposer() {
   fileQueue = [];
-  fileTitleInput.value = "";
+  composerTitle.value = "";
+  composerText.value = "";
   fileInput.value = "";
   cameraInput.value = "";
   renderFileQueue();
@@ -785,19 +855,11 @@ function renderFileQueue() {
   fileQueueEl.replaceChildren();
   if (!fileQueue.length) {
     fileQueueEl.hidden = true;
-    shareFilesBtn.disabled = isUploading;
-    fileTitleInput.placeholder = "제목 (선택 사항)";
-    shareFilesBtn.textContent = "파일 공유";
+    sharePostBtn.textContent = "공유";
     return;
   }
   fileQueueEl.hidden = false;
-  shareFilesBtn.disabled = isUploading;
-  shareFilesBtn.textContent = fileQueue.length > 1
-    ? `파일 공유 (${fileQueue.length}개)`
-    : "파일 공유";
-  fileTitleInput.placeholder = fileQueue.length > 1
-    ? "제목 (선택, 묶음 전체 제목)"
-    : "제목 (선택 사항)";
+  sharePostBtn.textContent = `공유 (파일 ${fileQueue.length}개)`;
 
   fileQueue.forEach(({ id, file }) => {
     const li = document.createElement("li");
@@ -814,27 +876,7 @@ function renderFileQueue() {
   });
 }
 
-function escapeAttr(value = "") {
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("<", "&lt;");
-}
-
-function escapeHtml(value = "") {
-  return escapeAttr(value)
-    .replaceAll(">", "&gt;")
-    .replaceAll("'", "&#039;");
-}
-
-function bundleTitle(files) {
-  const custom = fileTitleInput.value.trim();
-  if (custom) return custom;
-  if (files.length === 1) return files[0].name;
-  return `${files[0].name} 외 ${files.length - 1}개`;
-}
-
-/** content가 파일 묶음 JSON이면 files 배열 반환 */
+/** (레거시) content가 파일 묶음 JSON이면 files 배열 반환 */
 function parseBundleContent(content) {
   if (!content || typeof content !== "string") return null;
   const trimmed = content.trim();
@@ -849,21 +891,16 @@ function parseBundleContent(content) {
   }
 }
 
-function isBundleShare(item) {
-  return item.type === "files" || !!parseBundleContent(item.content);
-}
-
-/** @returns {{ path, url, name, size, mime }[]} */
+/** 첨부 파일 목록. files 컬럼 우선, 레거시(content JSON·file_path) 폴백 @returns {{ path, url, name, size, mime }[]} */
 function getShareFiles(item) {
+  if (Array.isArray(item.files) && item.files.length) return item.files;
   const bundled = parseBundleContent(item.content);
-  if (item.type === "files" || bundled) {
-    return bundled || [];
-  }
-  if (item.type === "file" && item.file_path) {
+  if (bundled) return bundled;
+  if (item.file_path) {
     return [{
       path: item.file_path,
       url: item.file_url,
-      name: item.title || "file",
+      name: item.file_name || item.title || "file",
       size: item.file_size,
       mime: item.mime_type || "application/octet-stream",
     }];
@@ -871,26 +908,20 @@ function getShareFiles(item) {
   return [];
 }
 
-function isFileShare(item) {
-  return item.type === "file" || isBundleShare(item);
+/** 본문 텍스트 (레거시 묶음 JSON은 본문으로 치지 않음) */
+function getShareText(item) {
+  if (!item.content) return "";
+  if (parseBundleContent(item.content)) return "";
+  return item.content;
 }
 
 function getShareTotalSize(item) {
-  if (isBundleShare(item)) {
-    return getShareFiles(item).reduce((s, f) => s + (f.size || 0), 0);
-  }
-  return item.file_size || 0;
+  return getShareFiles(item).reduce((s, f) => s + (f.size || 0), 0);
 }
 
 function getShareSearchText(item) {
-  if (item.type === "text" && !isBundleShare(item)) {
-    return `${item.title || ""} ${item.content || ""}`;
-  }
-  if (isFileShare(item)) {
-    const names = getShareFiles(item).map(f => f.name).join(" ");
-    return `${item.title || ""} ${names}`;
-  }
-  return item.title || "";
+  const names = getShareFiles(item).map(f => f.name).join(" ");
+  return `${item.title || ""} ${getShareText(item)} ${names}`;
 }
 
 async function removeShareStorage(item) {
@@ -898,161 +929,103 @@ async function removeShareStorage(item) {
   if (paths.length) await supabaseClient.storage.from(BUCKET_NAME).remove(paths);
 }
 
-async function shareQueuedFiles() {
-  if (!fileQueue.length || isUploading) return;
-  shareFilesBtn.disabled = true;
-  lockUpload(true);
-
-  const files = fileQueue.map(q => q.file);
-
-  try {
-    let ok = false;
-    if (files.length === 1) {
-      const title = fileTitleInput.value.trim() || files[0].name;
-      ok = await uploadSingleFile(files[0], title);
-      if (ok) showToast("파일 공유 완료");
-    } else {
-      ok = await uploadFileBundle(files);
-      if (ok) showToast(`파일 ${files.length}개 묶음 공유 완료`);
-    }
-    if (ok) {
-      clearFileQueue();
-      await loadShares();
-    }
-  } finally {
-    lockUpload(false);
-    shareFilesBtn.disabled = fileQueue.length === 0;
+/** 통합 작성기: 글·첨부를 한 게시물로 공유 */
+async function sharePost() {
+  if (isUploading) return;
+  const content = composerText.value.trim();
+  const queued  = fileQueue.map(q => q.file);
+  if (!content && !queued.length) {
+    showToast("내용을 입력하거나 파일을 첨부하세요.");
+    return;
   }
-}
 
-async function uploadFileBundle(files) {
-  const uploaded = [];
-  const fileExpiresAt = calcExpiresAt(fileExpiry.value);
+  lockUpload(true);
+  try {
+    const uploaded = await uploadQueuedFiles(queued);
+    if (uploaded === null) return; // 업로드 실패 (토스트는 내부에서 표시)
 
-  for (const file of files) {
-    const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const path = `${Date.now()}-${generateId()}-${safeName}`;
-    setProgress(0);
-    showToast(`${file.name} 업로드 중… (${uploaded.length + 1}/${files.length})`);
+    const expiresAt = calcExpiresAt(postExpiry.value);
+    const rawTitle  = composerTitle.value.trim();
+    let title = rawTitle;
+    if (!title) {
+      if (content)                    title = content.length > TITLE_MAX_LEN ? content.slice(0, TITLE_MAX_LEN) + "…" : content;
+      else if (uploaded.length === 1) title = uploaded[0].name;
+      else                            title = `${uploaded[0].name} 외 ${uploaded.length - 1}개`;
+    }
+    const first = uploaded[0];
 
-    const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, {
-      upsert: false,
-      onUploadProgress: p => setProgress(Math.round((p.loaded / p.total) * 100)),
+    const { error } = await supabaseClient.from("shares").insert({
+      type: uploaded.length ? "files" : "text",
+      title,
+      content: content || null,
+      files: uploaded.length ? uploaded : null,
+      file_path: first?.path ?? null,
+      file_url: first?.url ?? null,
+      file_name: first?.name ?? null,
+      file_size: uploaded.length ? uploaded.reduce((s, f) => s + f.size, 0) : null,
+      mime_type: first?.mime ?? null,
+      user_id: CURRENT_USER.id,
+      owner_email: OWNER_EMAIL || null,
+      ...(expiresAt && { expires_at: expiresAt }),
     });
 
-    if (uploadError) {
-      setProgress(null);
-      showToast(`업로드 실패: ${file.name}`);
+    if (error) {
       if (uploaded.length) {
         await supabaseClient.storage.from(BUCKET_NAME).remove(uploaded.map(u => u.path));
       }
-      return false;
+      console.error("post insert:", error);
+      showToast(`공유 실패: ${error.message || "DB 오류"}`);
+      return;
     }
-
-    const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(path);
-    uploaded.push({
-      path,
-      url: urlData.publicUrl,
-      name: file.name,
-      size: file.size,
-      mime: file.type || "application/octet-stream",
-    });
+    clearComposer();
+    showToast("공유 완료");
+    await loadShares();
+  } finally {
+    lockUpload(false);
   }
-
-  setProgress(null);
-  const totalSize = uploaded.reduce((s, f) => s + f.size, 0);
-  const title = bundleTitle(files);
-  const first = uploaded[0];
-
-  const { error: insertError } = await supabaseClient.from("shares").insert({
-    type: "files",
-    title,
-    content: JSON.stringify({ files: uploaded }),
-    file_path: first.path,
-    file_url: first.url,
-    file_size: totalSize,
-    mime_type: first.mime,
-    owner_token: OWNER_TOKEN,
-    owner_email: OWNER_EMAIL || null,
-    ...(fileExpiresAt && { expires_at: fileExpiresAt }),
-  });
-
-  if (insertError) {
-    await supabaseClient.storage.from(BUCKET_NAME).remove(uploaded.map(u => u.path));
-    console.error("bundle insert:", insertError);
-    showToast(`묶음 저장 실패: ${insertError.message || "DB 오류"}`);
-    return false;
-  }
-  return true;
 }
 
-async function uploadSingleFile(file, title) {
-  const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
-  const path = `${Date.now()}-${generateId()}-${safeName}`;
+/** 큐의 파일을 모두 업로드. 성공 시 메타 배열, 실패 시 null (부분 업로드는 롤백) */
+async function uploadQueuedFiles(files) {
+  if (!files.length) return [];
+  const uploaded = [];
 
-  setProgress(0);
-  showToast(`${file.name} 업로드 중…`);
+  showProgress(true);
+  try {
+    for (const file of files) {
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const path = `${Date.now()}-${generateId()}-${safeName}`;
+      showToast(`${file.name} 업로드 중… (${uploaded.length + 1}/${files.length})`);
 
-  const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, {
-    upsert: false,
-    onUploadProgress: p => setProgress(Math.round((p.loaded / p.total) * 100)),
-  });
+      const { error: uploadError } = await supabaseClient.storage.from(BUCKET_NAME).upload(path, file, { upsert: false });
 
-  if (uploadError) {
-    setProgress(null);
-    showToast(`업로드 실패: ${file.name}`);
-    return false;
+      if (uploadError) {
+        showToast(`업로드 실패: ${file.name}`);
+        if (uploaded.length) {
+          await supabaseClient.storage.from(BUCKET_NAME).remove(uploaded.map(u => u.path));
+        }
+        return null;
+      }
+
+      const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(path);
+      uploaded.push({
+        path,
+        url: urlData.publicUrl,
+        name: file.name,
+        size: file.size,
+        mime: file.type || "application/octet-stream",
+      });
+    }
+  } finally {
+    showProgress(false);
   }
-
-  const { data: urlData } = supabaseClient.storage.from(BUCKET_NAME).getPublicUrl(path);
-  const fileExpiresAt = calcExpiresAt(fileExpiry.value);
-
-  const { error: insertError } = await supabaseClient.from("shares").insert({
-    type: "file", title, content: null,
-    file_path: path, file_url: urlData.publicUrl,
-    file_size: file.size, mime_type: file.type || "application/octet-stream",
-    owner_token: OWNER_TOKEN,
-    owner_email: OWNER_EMAIL || null,
-    ...(fileExpiresAt && { expires_at: fileExpiresAt }),
-  });
-
-  setProgress(null);
-
-  if (insertError) {
-    await supabaseClient.storage.from(BUCKET_NAME).remove([path]);
-    showToast(`저장 실패: ${file.name}`);
-    return false;
-  }
-  return true;
+  return uploaded;
 }
 
-async function shareText() {
-  const content = textInput.value.trim();
-  if (!content) { showToast("공유할 텍스트를 입력하세요."); return; }
-  shareTextBtn.disabled = true;
-  const rawTitle     = titleInput.value.trim();
-  const title        = rawTitle || (content.length > TITLE_MAX_LEN ? content.slice(0, TITLE_MAX_LEN) + "…" : content);
-  const textExpiresAt = calcExpiresAt(textExpiry.value);
-
-  const { error } = await supabaseClient.from("shares").insert({
-    type: "text", title, content,
-    file_path: null, file_url: null, file_size: null, mime_type: null,
-    owner_token: OWNER_TOKEN,
-    owner_email: OWNER_EMAIL || null,
-    ...(textExpiresAt && { expires_at: textExpiresAt }),
-  });
-
-  shareTextBtn.disabled = false;
-  if (error) { showToast("텍스트 공유 실패"); return; }
-  textInput.value = ""; titleInput.value = "";
-  showToast("텍스트 공유 완료");
-  await loadShares();
-}
-
-async function deleteShare(item, itemEl) {
+async function deleteShare(item) {
   await removeShareStorage(item);
   const { error } = await supabaseClient.from("shares").delete().eq("id", item.id);
-  if (error) { showToast("삭제 실패"); resetDeleteBtn(itemEl); }
+  if (error) { showToast("삭제 실패"); }
   else { shares = shares.filter(s => s.id !== item.id); renderShares(); showToast("삭제 완료"); }
 }
 
@@ -1068,9 +1041,11 @@ async function copyToClipboard(text) {
 
 // ── 데이터 ───────────────────────────────────────────────
 async function loadShares() {
+  if (SHARE_VIEW_ID) return;
+  // 내 계정 자료 + 소유자 없는 레거시 자료 표시
   const { data, error } = await supabaseClient
     .from("shares").select("*")
-    .eq("owner_email", OWNER_EMAIL)
+    .or(`user_id.eq.${CURRENT_USER.id},owner_email.is.null`)
     .order("created_at", { ascending: false }).limit(200);
 
   if (error) {
@@ -1080,18 +1055,8 @@ async function loadShares() {
   }
   const now = Date.now();
   shares = (data || []).filter(item => !item.expires_at || new Date(item.expires_at).getTime() > now);
-  repairMislabeledBundles();
   statusBadge.textContent = "Supabase 연결됨";
   renderShares();
-}
-
-/** type=text 등으로 잘못 저장된 파일 묶음 JSON을 files 타입으로 자동 복구 */
-function repairMislabeledBundles() {
-  for (const item of shares) {
-    if (item.type === "files" || !parseBundleContent(item.content)) continue;
-    item.type = "files";
-    supabaseClient.from("shares").update({ type: "files" }).eq("id", item.id).then(() => {});
-  }
 }
 
 function subscribeRealtime() {
@@ -1113,24 +1078,96 @@ function getSorted(arr) {
   });
 }
 
+function matchesFilter(item) {
+  if (activeFilter === "files") return getShareFiles(item).length > 0;
+  if (activeFilter === "text")  return !!getShareText(item);
+  if (activeFilter === "image") return getShareFiles(item).some(f => f.mime?.startsWith("image/"));
+  return true;
+}
+
 function renderShares() {
   const keyword  = searchInput.value.trim().toLowerCase();
   const filtered = getSorted(shares).filter(item =>
-    getShareSearchText(item).toLowerCase().includes(keyword)
+    matchesFilter(item) && getShareSearchText(item).toLowerCase().includes(keyword)
   );
   const visible = filtered.slice(0, displayCount);
+
+  renderSuggestion();
 
   shareList.replaceChildren();
   if (!filtered.length) {
     const empty = document.createElement("div");
     empty.className = "empty";
-    empty.textContent = keyword ? "검색 결과가 없습니다." : "아직 공유된 자료가 없습니다.";
+    empty.textContent = keyword || activeFilter !== "all" ? "조건에 맞는 자료가 없습니다." : "아직 공유된 자료가 없습니다.";
     shareList.appendChild(empty);
     loadMoreBtn.hidden = true; return;
   }
   visible.forEach(item => shareList.appendChild(createItemEl(item)));
   loadMoreBtn.hidden = filtered.length <= displayCount;
   resetListScroll();
+}
+
+// ── 유사 항목 합치기 제안 ─────────────────────────────────
+function normalizeTitleKey(title = "") {
+  return title
+    .toLowerCase()
+    .replace(/\.[a-z0-9]{1,5}$/i, "")          // 확장자
+    .replace(/\s*외\s*\d+개\s*$/, "")            // "외 N개"
+    .replace(/[\s_\-()\[\]{}.,]+/g, " ")         // 구분 기호
+    .replace(/\d+/g, "#")                        // 연번 → #
+    .trim();
+}
+
+function findSimilarGroup() {
+  const mine = shares.filter(isItemOwner);
+  const groups = new Map();
+  for (const item of mine) {
+    const key = normalizeTitleKey(item.title);
+    if (key.replace(/[#\s]/g, "").length < 3) continue; // 의미 없는 짧은 키 제외
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(item);
+  }
+  const dismissed = new Set(JSON.parse(localStorage.getItem("dismissedSuggests") || "[]"));
+  for (const [, items] of groups) {
+    if (items.length < 2) continue;
+    const sig = items.map(i => i.id).sort().join(",");
+    if (dismissed.has(sig)) continue;
+    return { items, sig };
+  }
+  return null;
+}
+
+function renderSuggestion() {
+  const group = findSimilarGroup();
+  if (!group) { suggestBar.hidden = true; suggestBar.replaceChildren(); return; }
+
+  suggestBar.replaceChildren();
+  const label = document.createElement("span");
+  label.className = "suggest-label";
+  const names = group.items.slice(0, 2).map(i => `"${i.title || "제목 없음"}"`).join(", ");
+  label.textContent = `💡 비슷한 항목 ${group.items.length}개 발견: ${names}${group.items.length > 2 ? " 외" : ""}`;
+
+  const mergeBtn = document.createElement("button");
+  mergeBtn.textContent = "합치기";
+  mergeBtn.addEventListener("click", () => {
+    selectedIds = new Set(group.items.map(i => i.id));
+    updateMultiSelectUi();
+    renderShares();
+    openMergeModal();
+  });
+
+  const dismissBtn = document.createElement("button");
+  dismissBtn.className = "secondary";
+  dismissBtn.textContent = "무시";
+  dismissBtn.addEventListener("click", () => {
+    const dismissed = JSON.parse(localStorage.getItem("dismissedSuggests") || "[]");
+    dismissed.push(group.sig);
+    localStorage.setItem("dismissedSuggests", JSON.stringify(dismissed.slice(-50)));
+    renderSuggestion();
+  });
+
+  suggestBar.append(label, mergeBtn, dismissBtn);
+  suggestBar.hidden = false;
 }
 
 /** 스켈레톤 shimmer 등으로 생긴 가로 스크롤 잔여 위치 초기화 */
@@ -1143,21 +1180,19 @@ function resetListScroll() {
 }
 
 function createItemEl(item) {
-  const isBundle  = isBundleShare(item);
-  const isText    = item.type === "text" && !isBundle;
-  const isSingle  = item.type === "file" && !isBundle;
-  const isFile    = isFileShare(item);
   const files     = getShareFiles(item);
+  const text      = getShareText(item);
+  const hasFiles  = files.length > 0;
   const firstFile = files[0];
-  const isImage   = isSingle && item.mime_type?.startsWith("image/");
-  const isBundleImg = isBundle && firstFile?.mime?.startsWith("image/");
+  const firstImg  = firstFile?.mime?.startsWith("image/") ? firstFile : null;
   const isOwner   = isItemOwner(item);
   const date    = new Date(item.created_at).toLocaleString("ko-KR", {
     month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
   });
-  const size = isFile
-    ? (isBundle ? `${files.length}개 · ${formatBytes(getShareTotalSize(item))}` : formatBytes(item.file_size))
-    : "텍스트";
+  const sizeParts = [];
+  if (hasFiles) sizeParts.push(files.length > 1 ? `파일 ${files.length}개 · ${formatBytes(getShareTotalSize(item))}` : formatBytes(getShareTotalSize(item)));
+  if (text)     sizeParts.push("텍스트");
+  const size = sizeParts.join(" + ") || "빈 게시물";
 
   const article = document.createElement("article");
   article.className = "item"; article.dataset.id = item.id;
@@ -1170,20 +1205,19 @@ function createItemEl(item) {
   // 아이콘 / 썸네일
   const iconDiv = document.createElement("div");
   iconDiv.className = "icon";
-  const thumbUrlSrc = isImage ? item.file_url : (isBundleImg ? firstFile.url : null);
-  if (thumbUrlSrc) {
+  if (firstImg?.url) {
     const thumb = document.createElement("img");
-    thumb.src     = thumbUrl(thumbUrlSrc, 88);
+    thumb.src     = thumbUrl(firstImg.url, 88);
     thumb.alt     = "";
     thumb.loading = "lazy";
     thumb.addEventListener("click", e => {
       e.stopPropagation();
-      lightboxImg.src = thumbUrlSrc;
+      lightboxImg.src = firstImg.url;
       lightbox.classList.add("open");
     });
     iconDiv.appendChild(thumb);
   } else {
-    iconDiv.textContent = isBundle ? "📁" : (isFile ? getFileIcon(item.mime_type || firstFile?.mime) : "📝");
+    iconDiv.textContent = files.length > 1 ? "📁" : (hasFiles ? getFileIcon(firstFile?.mime) : "📝");
   }
 
   // 본문
@@ -1210,9 +1244,25 @@ function createItemEl(item) {
     metaText += ` · ⏱ ${h > 0 ? `${h}시간` : `${m}분`} 후 만료`;
   }
   meta.appendChild(document.createTextNode(metaText));
-  body.appendChild(titleEl); body.appendChild(meta);
+  body.appendChild(meta); // 제목은 아래에서 액션과 함께 .item-head 로 묶어 맨 위에 삽입
 
-  if (isBundle && files.length) {
+  // 텍스트: 한줄 스니펫 + 펼친 본문
+  if (text) {
+    const snippet = document.createElement("div");
+    snippet.className   = "item-snippet";
+    snippet.textContent = text.replace(/\s+/g, " ").trim();
+    body.appendChild(snippet);
+
+    const full = document.createElement("div");
+    full.className = "text-full";
+    full.innerHTML = DOMPurify.sanitize(marked.parse(text));
+    body.appendChild(full);
+  }
+
+  // 첨부 파일 목록: 2개 이상이거나, 1개라도 파일명이 제목·목록에 드러나지 않을 때 표시
+  const showAttachList = files.length > 1
+    || (files.length === 1 && (!!text || (item.title && item.title !== firstFile?.name)));
+  if (showAttachList) {
     const viewMode = bundleViewMode.get(item.id) || "list";
     const wrap = document.createElement("div");
     wrap.className = `bundle-wrap view-${viewMode}`;
@@ -1221,139 +1271,107 @@ function createItemEl(item) {
     preview.className = "bundle-preview";
     const previewNames = files.slice(0, 3).map(f => f.name).join(", ");
     preview.textContent = files.length > 3
-      ? `${previewNames} 외 ${files.length - 3}개`
-      : previewNames;
+      ? `📎 ${previewNames} 외 ${files.length - 3}개`
+      : `📎 ${previewNames}`;
 
     const toolbar = document.createElement("div");
     toolbar.className = "bundle-toolbar";
-    toolbar.innerHTML = `<span class="bundle-toolbar-label">보기</span>`;
-    const listBtn = document.createElement("button");
-    listBtn.type = "button";
-    listBtn.className = `view-btn${viewMode === "list" ? " active" : ""}`;
-    listBtn.dataset.action = "view-list";
-    listBtn.textContent = "리스트";
-    const gridBtn = document.createElement("button");
-    gridBtn.type = "button";
-    gridBtn.className = `view-btn${viewMode === "grid" ? " active" : ""}`;
-    gridBtn.dataset.action = "view-grid";
-    gridBtn.textContent = "아이콘";
-    toolbar.append(listBtn, gridBtn);
+    if (files.length > 1) {
+      toolbar.innerHTML = `<span class="bundle-toolbar-label">보기</span>`;
+      const listBtn = document.createElement("button");
+      listBtn.type = "button";
+      listBtn.className = `view-btn${viewMode === "list" ? " active" : ""}`;
+      listBtn.dataset.action = "view-list";
+      listBtn.textContent = "리스트";
+      const gridBtn = document.createElement("button");
+      gridBtn.type = "button";
+      gridBtn.className = `view-btn${viewMode === "grid" ? " active" : ""}`;
+      gridBtn.dataset.action = "view-grid";
+      gridBtn.textContent = "아이콘";
+      toolbar.append(listBtn, gridBtn);
+    }
 
     const bundleBody = document.createElement("div");
     bundleBody.className = "bundle-body";
     bundleBody.append(buildBundleListEl(files), buildBundleGridEl(files));
 
-    wrap.append(preview, toolbar, bundleBody);
+    if (files.length > 1) wrap.append(preview, toolbar, bundleBody);
+    else wrap.append(preview, bundleBody);
     body.appendChild(wrap);
-
-    const expBtn = document.createElement("button");
-    expBtn.className = "expand-btn";
-    expBtn.dataset.action = "expand";
-    expBtn.textContent = "펼치기";
-    body.appendChild(expBtn);
   }
 
-  // 텍스트: 한줄 스니펫 + 펼치기
-  if (isText && item.content) {
-    const snippet = document.createElement("div");
-    snippet.className   = "item-snippet";
-    snippet.textContent = item.content.replace(/\s+/g, " ").trim();
-    body.appendChild(snippet);
-
-    const full = document.createElement("div");
-    full.className = "text-full";
-    full.innerHTML = DOMPurify.sanitize(marked.parse(item.content));
-    body.appendChild(full);
-
+  // 펼치기 버튼 (본문 또는 파일 목록이 있을 때)
+  if (text || showAttachList) {
     const expBtn = document.createElement("button");
     expBtn.className = "expand-btn"; expBtn.dataset.action = "expand";
     expBtn.textContent = "펼치기";
     body.appendChild(expBtn);
   }
 
-  // 액션
+  // 액션: 공유·다운로드 우선 3개 상시 표시, 나머지는 + 로 펼침
   const actions = document.createElement("div"); actions.className = "item-actions";
 
-  if (isSingle && item.file_url) {
-    const openA = document.createElement("a");
-    openA.href = item.file_url; openA.target = "_blank"; openA.rel = "noreferrer";
-    const openBtn = document.createElement("button"); openBtn.textContent = "열기";
-    openA.appendChild(openBtn); actions.appendChild(openA);
-
-    const dlA = document.createElement("a");
-    dlA.href = item.file_url; dlA.download = item.title || "file"; dlA.rel = "noreferrer";
-    const dlBtn = document.createElement("button"); dlBtn.className = "secondary"; dlBtn.textContent = "↓";
-    dlBtn.title = "다운로드";
-    dlA.appendChild(dlBtn); actions.appendChild(dlA);
-
-    const cuBtn = document.createElement("button");
-    cuBtn.className = "secondary"; cuBtn.dataset.action = "copy-url";
-    cuBtn.textContent = "링크"; cuBtn.title = "URL 복사";
-    actions.appendChild(cuBtn);
-
-    const qrBtn = document.createElement("button");
-    qrBtn.className = "secondary"; qrBtn.dataset.action = "show-qr"; qrBtn.textContent = "QR";
-    actions.appendChild(qrBtn);
-  } else if (isBundle) {
-    const cuBtn = document.createElement("button");
-    cuBtn.className = "secondary"; cuBtn.dataset.action = "copy-url";
-    cuBtn.textContent = "링크"; cuBtn.title = "모든 파일 URL 복사";
-    actions.appendChild(cuBtn);
-
-    const qrBtn = document.createElement("button");
-    qrBtn.className = "secondary"; qrBtn.dataset.action = "show-qr"; qrBtn.textContent = "QR";
-    qrBtn.title = "첫 번째 파일 QR";
-    actions.appendChild(qrBtn);
-  } else if (isText) {
-    const copyBtn = document.createElement("button");
-    copyBtn.dataset.action = "copy"; copyBtn.textContent = "복사";
-    actions.appendChild(copyBtn);
-
-    const qrBtn = document.createElement("button");
-    qrBtn.className = "secondary"; qrBtn.dataset.action = "show-qr"; qrBtn.textContent = "QR";
-    actions.appendChild(qrBtn);
+  const defs = [];
+  if (hasFiles && firstFile?.url) {
+    defs.push({ icon: "↗", label: files.length > 1 ? "첫 번째 파일 열기" : "파일 열기", href: firstFile.url });
   }
-
+  if (files.length === 1 && firstFile?.url) {
+    defs.push({ icon: "↓", label: "다운로드", href: fileDownloadUrl(firstFile.url, firstFile.name), download: firstFile.name || "file" });
+  }
+  defs.push({ icon: "🔗", label: "공유 링크 복사", action: "share-link" });
+  if (text) defs.push({ icon: "📋", label: "내용 복사", action: "copy" });
+  defs.push({ icon: "QR", label: "QR 코드", action: "show-qr" });
   if (isOwner) {
-    const editBtn = document.createElement("button");
-    editBtn.className = "secondary"; editBtn.dataset.action = "edit";
-    editBtn.textContent = "수정";
-    editBtn.title = isBundle ? "제목 수정" : (isFile ? "파일 교체" : "제목·내용 수정");
-    actions.insertBefore(editBtn, actions.firstChild);
-
-    const delBtn = document.createElement("button");
-    delBtn.className = "danger"; delBtn.dataset.action = "delete-request"; delBtn.textContent = "✕";
-    delBtn.title = "삭제";
-    actions.appendChild(delBtn);
+    defs.push({ icon: "✏️", label: "수정", action: "edit" });
+    defs.push({ icon: "🗑", label: "삭제", action: "delete", cls: "icon-danger" });
   }
+
+  // 4개 이하면 전부 표시 (+ 하나 숨기려고 + 버튼을 만드는 건 낭비)
+  const visibleCount = defs.length <= 4 ? defs.length : 3;
+
+  defs.forEach((d, i) => {
+    const b = document.createElement("button");
+    b.type = "button"; b.className = `icon-act ${d.cls || ""}`.trim();
+    b.textContent = d.icon; b.title = d.label; b.setAttribute("aria-label", d.label);
+    let el = b;
+    if (d.href) {
+      const a = document.createElement("a");
+      a.href = d.href; a.rel = "noreferrer";
+      if (d.download) a.download = d.download; else a.target = "_blank";
+      a.appendChild(b);
+      el = a;
+    } else {
+      b.dataset.action = d.action;
+    }
+    if (i >= visibleCount) el.classList.add("extra");
+    actions.appendChild(el);
+  });
+
+  if (defs.length > visibleCount) {
+    const moreBtn = document.createElement("button");
+    moreBtn.type = "button"; moreBtn.className = "icon-act more-btn";
+    moreBtn.dataset.action = "more"; moreBtn.textContent = "+";
+    moreBtn.title = "더 보기"; moreBtn.setAttribute("aria-label", "더 보기");
+    actions.appendChild(moreBtn);
+  }
+
+  // 제목 + 액션을 한 줄(상단)로 묶기
+  const head = document.createElement("div");
+  head.className = "item-head";
+  head.append(titleEl, actions);
+  body.prepend(head);
 
   article.appendChild(cb);
   article.appendChild(iconDiv);
   article.appendChild(body);
-  article.appendChild(actions);
   return article;
 }
 
 // ── 유틸 ─────────────────────────────────────────────────
-function thumbUrl(url, w = 400) {
-  return url.replace("/storage/v1/object/public/", "/storage/v1/render/image/public/") + `?width=${w}&resize=cover`;
-}
-
-function getFileIcon(m = "") {
-  if (m.startsWith("image/"))                         return "🖼️";
-  if (m.startsWith("video/"))                         return "🎬";
-  if (m.startsWith("audio/"))                         return "🎵";
-  if (m === "application/pdf")                        return "📄";
-  if (/spreadsheet|excel/i.test(m))                   return "📊";
-  if (/document|word|presentation|powerpoint/i.test(m)) return "📝";
-  if (/zip|rar|compress|archive|7z/i.test(m))         return "🗜️";
-  if (m.startsWith("text/"))                          return "📃";
-  return "📎";
-}
-
-function setProgress(pct) {
-  if (pct === null) { progressWrap.hidden = true; progressBar.style.width = "0%"; return; }
-  progressWrap.hidden = false; progressBar.style.width = `${pct}%`;
+/* supabase-js는 업로드 진행률 콜백을 지원하지 않으므로 진행 중 표시(indeterminate)만 제공 */
+function showProgress(on) {
+  progressWrap.hidden = !on;
+  progressBar.classList.toggle("indeterminate", on);
 }
 
 function renderSkeleton() {
@@ -1362,20 +1380,6 @@ function renderSkeleton() {
     const sk = document.createElement("div"); sk.className = "skeleton"; shareList.appendChild(sk);
   }
   resetListScroll();
-}
-
-function generateId() {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
-  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
-    const r = Math.random() * 16 | 0;
-    return (c === "x" ? r : (r & 0x3 | 0x8)).toString(16);
-  });
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return "0 B";
-  const u = ["B","KB","MB","GB"], i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
 }
 
 function showToast(msg) {

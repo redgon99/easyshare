@@ -1,4 +1,4 @@
-<!doctype html>
+﻿<!doctype html>
 <html lang="ko" data-theme="light">
 <head>
   <meta charset="UTF-8" />
@@ -6,7 +6,6 @@
   <title>관리자 대시보드 · 자료공유</title>
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml" />
   <link rel="stylesheet" href="style.css" />
-  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
 <body>
 
@@ -16,11 +15,11 @@
     <div class="login-brand">
       <span class="login-icon">🔒</span>
       <h1>관리자 로그인</h1>
-      <p>관리자 이메일로 접근합니다</p>
+      <p>관리자 키로 접근합니다 (서버에서 검증)</p>
     </div>
     <div class="login-form-wrap">
-      <label for="adminEmailInput">관리자 이메일</label>
-      <input id="adminEmailInput" type="email" placeholder="admin@example.com" autocomplete="email" />
+      <label for="adminKeyInput">관리자 키</label>
+      <input id="adminKeyInput" type="password" placeholder="관리자 키 입력" autocomplete="off" />
       <p class="login-error" id="adminError"></p>
       <button id="adminLoginBtn">로그인</button>
     </div>
@@ -340,42 +339,67 @@
 </style>
 
 <script src="config.js"></script>
+<script src="shared.js"></script>
 <script>
-const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const ADMIN_API_URL = `${SUPABASE_URL}/functions/v1/admin-api`;
 
+let ADMIN_KEY = sessionStorage.getItem('adminKey') || '';
 let allShares = [], allVisits = [], selectedIds = new Set();
+
+// ── 서버 API (service role은 Edge Function 내부에만 존재) ──
+async function adminApi(action, payload = {}) {
+  const res = await fetch(ADMIN_API_URL, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${SUPABASE_KEY}`,
+      'apikey': SUPABASE_KEY,
+      'x-admin-key': ADMIN_KEY,
+    },
+    body: JSON.stringify({ action, ...payload }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data;
+}
 
 // ── 인증 ─────────────────────────────────────────────────
 function checkAdmin() {
-  const stored = (localStorage.getItem('ownerEmail') || '').trim().toLowerCase();
-  if (stored && stored === ADMIN_EMAIL.toLowerCase()) {
-    showDashboard(stored);
-  } else {
-    document.getElementById('adminLogin').hidden = false;
-    document.getElementById('adminLoginBtn').addEventListener('click', tryLogin);
-    document.getElementById('adminEmailInput').addEventListener('keydown', e => {
-      if (e.key === 'Enter') tryLogin();
-    });
+  if (ADMIN_KEY) {
+    showDashboard();
+    return;
   }
+  document.getElementById('adminLogin').hidden = false;
+  document.getElementById('adminLoginBtn').addEventListener('click', tryLogin);
+  document.getElementById('adminKeyInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') tryLogin();
+  });
 }
 
-function tryLogin() {
-  const input = document.getElementById('adminEmailInput');
+async function tryLogin() {
+  const input = document.getElementById('adminKeyInput');
   const err   = document.getElementById('adminError');
-  const email = input.value.trim().toLowerCase();
-  if (!email || email !== ADMIN_EMAIL.toLowerCase()) {
-    err.textContent = '관리자 이메일이 일치하지 않습니다.';
+  const key   = input.value.trim();
+  if (!key) { err.textContent = '관리자 키를 입력하세요.'; input.focus(); return; }
+  err.textContent = '확인 중…';
+  ADMIN_KEY = key;
+  try {
+    await adminApi('overview');
+  } catch {
+    ADMIN_KEY = '';
+    err.textContent = '관리자 키가 올바르지 않습니다.';
     input.focus();
     return;
   }
+  sessionStorage.setItem('adminKey', key);
   err.textContent = '';
   document.getElementById('adminLogin').hidden = true;
-  showDashboard(email);
+  showDashboard();
 }
 
-function showDashboard(email) {
+function showDashboard() {
   document.getElementById('adminApp').hidden = false;
-  document.getElementById('adminEmailBadge').textContent = email;
+  document.getElementById('adminEmailBadge').textContent = '관리자';
   loadTheme();
   bindEvents();
   loadAll();
@@ -395,12 +419,18 @@ function applyTheme(t) {
 // ── 데이터 로드 ───────────────────────────────────────────
 async function loadAll() {
   document.getElementById('statTotal').textContent = '…';
-  const [shares, visits] = await Promise.all([
-    db.from('shares').select('*').order('created_at', { ascending: false }).limit(500),
-    db.from('visits').select('*').order('visited_at', { ascending: false }).limit(1000),
-  ]);
-  allShares = shares.data || [];
-  allVisits = visits.data || [];
+  try {
+    const data = await adminApi('overview');
+    allShares = data.shares || [];
+    allVisits = data.visits || [];
+  } catch (e) {
+    showToast(`데이터 로드 실패: ${e.message}`);
+    if (/unauthorized/i.test(e.message)) {
+      sessionStorage.removeItem('adminKey');
+      location.reload();
+    }
+    return;
+  }
   updateStats();
   renderUploads();
   renderVisits();
@@ -461,8 +491,8 @@ function renderUploads() {
     tr.innerHTML = `
       <td><input type="checkbox" class="row-check" data-id="${item.id}" ${selectedIds.has(item.id) ? 'checked' : ''}></td>
       <td style="font-size:1rem">${item.type === 'text' ? '📝' : '📁'}</td>
-      <td class="cell-title" title="${esc(item.title||'')}">${esc(item.title||'제목 없음')}</td>
-      <td class="cell-email" title="${esc(item.owner_email||'')}">${esc(item.owner_email||'-')}</td>
+      <td class="cell-title" title="${escapeHtml(item.title||'')}">${escapeHtml(item.title||'제목 없음')}</td>
+      <td class="cell-email" title="${escapeHtml(item.owner_email||'')}">${escapeHtml(item.owner_email||'-')}</td>
       <td style="white-space:nowrap">${item.file_size != null ? formatBytes(item.file_size) : '-'}</td>
       <td style="white-space:nowrap;font-size:.8rem">${date}</td>
       <td style="white-space:nowrap;font-size:.8rem">${expiryText}</td>
@@ -521,9 +551,9 @@ function renderVisits() {
   filtered.forEach(v => {
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td class="cell-email">${esc(v.owner_email || '-')}</td>
+      <td class="cell-email">${escapeHtml(v.owner_email || '-')}</td>
       <td style="font-size:.8rem;white-space:nowrap">${fmtDate(v.visited_at)}</td>
-      <td class="cell-ua" title="${esc(v.user_agent||'')}">${esc(parseUA(v.user_agent||''))}</td>
+      <td class="cell-ua" title="${escapeHtml(v.user_agent||'')}">${escapeHtml(parseUA(v.user_agent||''))}</td>
     `;
     tbody.appendChild(tr);
   });
@@ -569,13 +599,13 @@ function renderUsers() {
   entries.forEach(([email, s]) => {
     const card   = document.createElement('div');
     card.className = 'user-card';
-    const color  = email.includes('@') ? avatarColor(email) : '#888';
+    const color  = email.includes('@') ? getAvatarColor(email) : '#888';
     const last   = s.last ? s.last.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' }) : '-';
     const visits = visitCount[email] || 0;
     card.innerHTML = `
       <div class="user-card-header">
         <div class="user-avatar" style="background:${color}">${email[0].toUpperCase()}</div>
-        <div class="user-email" title="${esc(email)}">${esc(email)}</div>
+        <div class="user-email" title="${escapeHtml(email)}">${escapeHtml(email)}</div>
       </div>
       <div class="user-stats">
         <div class="user-stat"><div class="user-stat-num">${s.files}</div><div class="user-stat-label">파일</div></div>
@@ -597,9 +627,8 @@ function bindEvents() {
   });
   document.getElementById('refreshBtn').addEventListener('click', loadAll);
   document.getElementById('adminLogoutBtn').addEventListener('click', () => {
-    document.getElementById('adminApp').hidden = true;
-    document.getElementById('adminEmailInput').value = '';
-    document.getElementById('adminLogin').hidden = false;
+    sessionStorage.removeItem('adminKey');
+    location.reload();
   });
 
   // 탭 전환
@@ -641,7 +670,8 @@ function bindEvents() {
     if (!btn) return;
     const item = allShares.find(s => s.id === btn.dataset.id);
     if (!item || !confirm(`"${item.title || '제목 없음'}"을 삭제할까요?`)) return;
-    await deleteItem(item);
+    try { await adminApi('delete-shares', { ids: [item.id] }); }
+    catch (err) { showToast(`삭제 실패: ${err.message}`); return; }
     allShares = allShares.filter(s => s.id !== item.id);
     updateStats(); renderUploads(); renderUsers();
   });
@@ -649,45 +679,29 @@ function bindEvents() {
   // 선택 삭제
   document.getElementById('bulkDeleteBtn').addEventListener('click', async () => {
     if (!selectedIds.size || !confirm(`${selectedIds.size}개를 삭제할까요?`)) return;
-    const targets = allShares.filter(s => selectedIds.has(s.id));
-    for (const item of targets) await deleteItem(item);
+    const ids = [...selectedIds];
+    try { await adminApi('delete-shares', { ids }); }
+    catch (err) { showToast(`삭제 실패: ${err.message}`); return; }
     allShares = allShares.filter(s => !selectedIds.has(s.id));
     selectedIds.clear();
     updateStats(); renderUploads(); renderUsers();
-    showToast(`${targets.length}개 삭제 완료`);
+    showToast(`${ids.length}개 삭제 완료`);
   });
 
-  // 만료 항목 삭제
+  // 만료 항목 삭제 (스토리지 파일까지 서버에서 정리)
   document.getElementById('deleteExpiredBtn').addEventListener('click', async () => {
     const expired = allShares.filter(s => s.expires_at && new Date(s.expires_at) <= new Date());
     if (!expired.length) { showToast('만료된 항목이 없습니다'); return; }
     if (!confirm(`만료된 항목 ${expired.length}개를 삭제할까요?`)) return;
-    for (const item of expired) await deleteItem(item);
-    const ids = new Set(expired.map(s => s.id));
-    allShares = allShares.filter(s => !ids.has(s.id));
-    updateStats(); renderUploads(); renderUsers();
-    showToast(`${expired.length}개 삭제 완료`);
+    try {
+      const r = await adminApi('delete-expired');
+      showToast(`${r.deleted}개 삭제 완료`);
+    } catch (err) { showToast(`삭제 실패: ${err.message}`); return; }
+    await loadAll();
   });
 
   // CSV 내보내기
   document.getElementById('exportCsvBtn').addEventListener('click', exportCsv);
-}
-
-function getItemStoragePaths(item) {
-  if (item.type === 'files') {
-    try {
-      const data = JSON.parse(item.content || '{}');
-      return (data.files || []).map(f => f.path).filter(Boolean);
-    } catch { return []; }
-  }
-  if (item.type === 'file' && item.file_path) return [item.file_path];
-  return [];
-}
-
-async function deleteItem(item) {
-  const paths = getItemStoragePaths(item);
-  if (paths.length) await db.storage.from(BUCKET_NAME).remove(paths);
-  await db.from('shares').delete().eq('id', item.id);
 }
 
 function exportCsv() {
@@ -710,26 +724,9 @@ function exportCsv() {
   a.click();
 }
 
-// ── 유틸 ─────────────────────────────────────────────────
-function avatarColor(email) {
-  const colors = ['#2563eb','#7c3aed','#db2777','#059669','#d97706','#dc2626','#0891b2'];
-  let h = 0;
-  for (let i = 0; i < email.length; i++) h = email.charCodeAt(i) + ((h << 5) - h);
-  return colors[Math.abs(h) % colors.length];
-}
-
+// ── 유틸 (공용 함수는 shared.js) ──────────────────────────
 function fmtDate(iso) {
   return new Date(iso).toLocaleString('ko-KR', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
-}
-
-function formatBytes(bytes) {
-  if (!bytes) return '0 B';
-  const u = ['B','KB','MB','GB'], i = Math.floor(Math.log(bytes) / Math.log(1024));
-  return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${u[i]}`;
-}
-
-function esc(s) {
-  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
 function showToast(msg) {
